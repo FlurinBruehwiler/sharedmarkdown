@@ -1,4 +1,5 @@
-// Bundles the frontend into ../SharedMarkdown/dist: one hashed (cache-forever) JS file, CSS inlined into index.html.
+// Bundles the frontend into ../SharedMarkdown/dist: one hashed (cache-forever) JS file, CSS inlined into index.html,
+// and the service worker (sw.js).
 import * as esbuild from 'esbuild'
 import { execSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -29,4 +30,17 @@ const html = fs.readFileSync('index.html', 'utf8')
   .replace('/*CSS*/', () => css)
   .replace('/*JS*/', '/assets/' + path.basename(js))
 fs.writeFileSync(out + '/index.html', html)
+
+// The service worker: its own entry, at the site root (its scope) and not hashed, so browsers find
+// new versions at the same URL. The bundle name is baked in: each deploy changes sw.js and replaces the cache.
+await esbuild.build({
+  entryPoints: ['src/sw.ts'],
+  bundle: true,
+  minify: true,
+  format: 'iife', // registered as a classic worker script
+  target: 'es2022',
+  outfile: out + '/sw.js',
+  legalComments: 'none',
+  define: { __BUILD__: JSON.stringify('/assets/' + path.basename(js)) },
+})
 console.log(`js ${(fs.statSync(js).size / 1024).toFixed(1)} KiB, html ${(html.length / 1024).toFixed(1)} KiB`)
