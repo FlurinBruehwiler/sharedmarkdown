@@ -50,7 +50,8 @@ const view = editor.view
 if (new URLSearchParams(location.search).has('debug')) Object.assign(window, { cmView: view, smHub: hub, smSync: sync })
 
 // The page's own title (index.html) stays while a document is empty: it is what search engines see for "/".
-const siteTitle = document.title
+// A document's page comes with its title for link previews, and the site's in data-site.
+const siteTitle = document.querySelector('title')?.dataset.site ?? document.title
 
 function textChanged() {
   const md = view.state.doc.toString()

@@ -85,6 +85,30 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
         return await db.Documents.Where(d => d.ReadId == readId).Select(d => d.Id).FirstOrDefaultAsync();
     }
 
+    // For link previews: crawlers fetch any URL, so this never loads a document into memory or creates one.
+    public async Task<string?> PreviewText(string? id, string? readId)
+    {
+        if (readId != null)
+        {
+            if (IsDeletedReadId(readId)) return null;
+            if (_readIds.TryGetValue(readId, out var editId)) id = editId;
+        }
+        if (id != null)
+        {
+            if (IsDeleted(id)) return null;
+            if (_docs.TryGetValue(id, out var s))
+            {
+                await s.Lock.WaitAsync();
+                try { if (!s.Deleted && !s.Evicted) return s.Doc.Text(); }
+                finally { s.Lock.Release(); }
+            }
+        }
+        using var scope = scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDb>();
+        var docs = db.Documents.AsNoTracking();
+        return await (id != null ? docs.Where(d => d.Id == id) : docs.Where(d => d.ReadId == readId)).Select(d => d.Content).FirstOrDefaultAsync();
+    }
+
     public string EnsureReadId(DocState s)
     {
         if (s.ReadId != null) return s.ReadId;
