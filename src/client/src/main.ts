@@ -67,7 +67,7 @@ function openLink(href: string) {
 
 async function open(key: string) {
   clearTimeout(titleTimer)
-  if (sync.key) textChanged() // record the outgoing document before the editor is cleared
+  if (sync.loaded) textChanged() // the outgoing document, before the editor is cleared
   await sync.open(key, () => {
     editor.reset(key)
     document.body.classList.toggle('readonly', isReadKey(key))

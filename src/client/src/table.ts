@@ -17,7 +17,6 @@ const linkHandler = Facet.define<LinkHandler, LinkHandler>({ combine: handlers =
 export type Align = '' | 'l' | 'c' | 'r'
 /** A cell's content range (trimmed) and slot range (between the pipes), relative to its line. */
 interface Cell { from: number, to: number, slotFrom: number, slotTo: number }
-/** A cell read from the document: also its line and text. */
 interface SourceCell extends Cell { line: Line, text: string }
 /** A table's source. `rows[0]` is the header; the delimiter is `lines[1]`. */
 interface Table { from: number, to: number, lines: Line[], aligns: Align[], delim: Cell[], rows: SourceCell[][], cols: number }
@@ -26,7 +25,6 @@ interface Rect { r1: number, c1: number, r2: number, c2: number }
 
 const width = (s: string) => [...s].length
 
-/** Cells of one table row: content range (trimmed) and slot range (between the pipes), relative to the line. */
 export function splitRow(text: string): Cell[] {
   const cells: Cell[] = []
   let i = 0
@@ -76,7 +74,6 @@ export function readTable(doc: Text, from: number, to: number): Table {
   return { from: first.from, to: last.to, lines, aligns, delim, rows, cols: header.length }
 }
 
-/** Markdown for a table, columns padded to equal width and aligned like the delimiter row says. */
 export function formatTable(rows: string[][], aligns: Align[]) {
   const cols = Math.max(1, ...rows.map(r => r.length))
   const w: number[] = []
@@ -109,14 +106,12 @@ export function cellChange(t: Table, r: number, c: number, text: string): Change
   if (!line) return null
   const cell = t.rows[r][c]
   if (!cell) {
-    // A short row: append the missing cells.
     const have = t.rows[r].length
     const missing = Array.from({ length: c - have }, () => '   |').join('')
     const endsWithPipe = /\|\s*$/.test(line.text)
     return { from: line.to, insert: (endsWithPipe ? '' : ' |') + missing + ` ${text} |` }
   }
   if (cell.from === cell.to) {
-    // Empty slot: keep a space on both sides of the content.
     const at = cell.slotFrom + (line.text[cell.slotFrom] === ' ' ? 1 : 0)
     const lead = line.text[cell.slotFrom] === ' ' ? '' : ' '
     const trail = at < cell.slotTo && line.text[at] === ' ' ? '' : ' '
@@ -128,7 +123,6 @@ export function cellChange(t: Table, r: number, c: number, text: string): Change
   return { from, to: from + d.d, insert: d.i }
 }
 
-/** An empty row whose cell slots line up with the delimiter row. */
 function emptyRow(t: Table) {
   return '|' + Array.from({ length: t.cols }, (_, c) => ' '.repeat(Math.max(2, (t.delim[c]?.slotTo ?? 4) - (t.delim[c]?.slotFrom ?? 0)))).join('|') + '|'
 }
@@ -312,7 +306,6 @@ export function rawOffset(raw: string, visible: number) {
 // ---------- the widget ----------
 
 interface CellSpec { raw: string, parts: Inline[] }
-/** What a rendered table shows. */
 interface TableSpec { rows: CellSpec[][], aligns: Align[] }
 
 /** Per-table UI state, kept on the root element so it survives re-renders. */
@@ -322,9 +315,7 @@ interface TableDOM extends HTMLDivElement {
   tableDOM: HTMLTableElement
   rowGrip: HTMLButtonElement
   colGrip: HTMLButtonElement
-  /** The cell being edited, if any. */
   editing: { r: number, c: number } | null
-  /** A rectangular selection of whole cells (drag, Shift+click, Shift+arrows). */
   rect: Rect | null
   /** Where the table started when last edited or focused, to find it again after a re-render. */
   from: number
@@ -350,13 +341,12 @@ function trackCell(wrap: TableDOM, r: number, c: number) {
   tracked = line && cell ? { view: wrap.view, pos: line.from + cell.slotFrom } : null
 }
 
-/** The cell at a tracked position, as a pending focus. `text` is what the cell showed (edge spaces included). */
 function focusTracked(view: EditorView, caret: Caret, text?: string) {
   if (!tracked || tracked.view !== view) return false
   const node = tableAt(view.state, tracked.pos)
   if (!node) return false
   const t = readTable(view.state.doc, node.from, node.to)
-  const lineIdx = t.lines.findIndex(l => tracked!.pos >= l.from && tracked!.pos <= l.to) // tracked is set: checked above
+  const lineIdx = t.lines.findIndex(l => tracked!.pos >= l.from && tracked!.pos <= l.to)
   if (lineIdx < 0 || lineIdx === 1) return false
   const r = lineIdx === 0 ? 0 : lineIdx - 1
   const rel = tracked.pos - t.lines[lineIdx].from
@@ -365,7 +355,6 @@ function focusTracked(view: EditorView, caret: Caret, text?: string) {
   return true
 }
 
-/** Focuses the pending cell in the table at (or, if it moved, nearest to) the remembered position. */
 function applyPendingFocus(view: EditorView) {
   const p = pendingFocus
   if (!p || p.view !== view) return
@@ -437,7 +426,6 @@ class TableWidget extends WidgetType {
     queueMicrotask(() => { if (focusTracked(view, caret, text)) applyPendingFocus(view) })
   }
 
-  /** Renders the spec into the element, keeping the cell being edited (and its caret) untouched. */
   fill(wrap: TableDOM) {
     wrap.widget = this
     const { rows, aligns } = this.spec
@@ -498,7 +486,7 @@ function setTextKeepingCaret(td: HTMLElement, text: string) {
   if (sel?.rangeCount && td.contains(sel.anchorNode)) {
     const before = document.createRange()
     before.selectNodeContents(td)
-    before.setEnd(sel.anchorNode!, sel.anchorOffset) // anchorNode is set: the range count is non-zero
+    before.setEnd(sel.anchorNode!, sel.anchorOffset)
     const old = td.textContent ?? '', off = before.toString().length
     const d = diff(old, text)
     at = off <= d.p ? off : off >= d.p + d.d ? off - d.d + d.i.length : d.p + d.i.length
@@ -541,10 +529,8 @@ function focusCell(wrap: TableDOM, r: number, c: number, caret: Caret = 'end', s
 
 // ---------- operations ----------
 
-/** False in a read-only view (shared view-only link): tables are shown but can't be changed. */
 const canEdit = (view: EditorView) => !view.state.readOnly && view.state.facet(EditorView.editable)
 
-/** Reads the table this widget shows, from the current document. */
 function source(wrap: TableDOM): Table | null {
   const view = wrap.view
   let pos: number
@@ -732,7 +718,7 @@ function caretOffset(td: HTMLElement) {
   if (!sel?.rangeCount || !td.contains(sel.anchorNode)) return 0
   const range = document.createRange()
   range.selectNodeContents(td)
-  range.setEnd(sel.anchorNode!, sel.anchorOffset) // anchorNode exists: the range count is non-zero
+  range.setEnd(sel.anchorNode!, sel.anchorOffset)
   return range.toString().length
 }
 
@@ -821,7 +807,7 @@ function attach(wrap: TableDOM, addCol: HTMLButtonElement, addRow: HTMLButtonEle
     if (!td || !wrap.contains(td)) return
     const p = posOf(td)
     const link = e.target instanceof Element ? e.target.closest<HTMLElement>('.cm-tbl-link') : null
-    if (link && !td.classList.contains('cm-tbl-raw')) { e.preventDefault(); view.state.facet(linkHandler)(link.dataset.href!); return } // renderInline sets data-href
+    if (link && !td.classList.contains('cm-tbl-raw')) { e.preventDefault(); view.state.facet(linkHandler)(link.dataset.href!); return }
     if (e.shiftKey && wrap.editing) { e.preventDefault(); setRect(wrap, norm(wrap.editing, p)); wrap.focus(); return }
     dragFrom = p
   })
@@ -831,7 +817,6 @@ function attach(wrap: TableDOM, addCol: HTMLButtonElement, addRow: HTMLButtonEle
     if (!td) return
     const p = posOf(td)
     if (p.r === dragFrom.r && p.c === dragFrom.c && !wrap.rect) return
-    // Dragging across cells selects a rectangle of cells instead of text.
     e.preventDefault()
     getSelection()?.removeAllRanges()
     setRect(wrap, norm(dragFrom, p))
@@ -847,7 +832,6 @@ function attach(wrap: TableDOM, addCol: HTMLButtonElement, addRow: HTMLButtonEle
     try { wrap.from = wrap.view.posAtDOM(wrap) } catch { /* not attached */ }
     trackCell(wrap, p.r, p.c)
     if (!td.classList.contains('cm-tbl-raw')) {
-      // Switch the cell to its markdown, keeping the caret where it was clicked.
       const visible = caretOffset(td)
       const raw = wrap.widget.spec.rows[p.r]?.[p.c]?.raw ?? ''
       td.textContent = raw
@@ -902,7 +886,6 @@ function onKey(wrap: TableDOM, e: KeyboardEvent) {
   const w = wrap.widget
   const modKey = isMac() ? e.metaKey : e.ctrlKey
 
-  // A selected rectangle of cells.
   if (wrap.rect) {
     const rect = wrap.rect
     if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteRect(wrap, rect); return }
@@ -1029,7 +1012,6 @@ export function tableEnter(view: EditorView) {
   return true
 }
 
-/** Inserts a table (replacing from..to) and puts the caret into a cell of the rendered table. */
 export function insertTable(view: EditorView, from: number, to: number, rows: string[][], focus = { r: 0, c: 0 }) {
   const doc = view.state.doc
   // Text right after a table would become another row.
@@ -1042,7 +1024,6 @@ export function insertTable(view: EditorView, from: number, to: number, rows: st
   applyPendingFocus(view)
 }
 
-/** ArrowUp/Down into a rendered table: focus its first (or last) row's first cell. */
 export const tableArrow = (forward: boolean): Command => view => {
   const { state } = view
   const sel = state.selection.main
@@ -1062,7 +1043,10 @@ export const tableArrow = (forward: boolean): Command => view => {
 }
 
 const trackEdits = EditorView.updateListener.of(u => {
-  if (tracked && tracked.view === u.view && u.docChanged) tracked.pos = u.changes.mapPos(tracked.pos, 1)
+  if (!tracked || tracked.view !== u.view || !u.docChanged) return
+  // After view.setState (another document) the position belongs to a document that is gone.
+  if (tracked.pos > u.startState.doc.length) tracked = null
+  else tracked.pos = u.changes.mapPos(tracked.pos, 1)
 })
 
 export function tables(openLink: LinkHandler): Extension {
