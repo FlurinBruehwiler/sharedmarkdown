@@ -33,6 +33,8 @@ const store = {
 
 interface DocEntry { id: string, title: string, at: number }
 let docs = store.get<DocEntry[]>('docs', [])
+/** Documents removed from the list; link discovery doesn't add them back until they are opened again. */
+let dismissed = new Set(store.get<string[]>('dismissed', []))
 let current = '' // id of the open document ('' until the first one opens)
 
 /** First line with text, without markdown syntax: images dropped, links reduced to their text. Mirrors DocStore.TitleOf. */
@@ -50,6 +52,7 @@ function titleOf(md: string) {
 }
 
 function remember(id: string, title: string | null, touch: boolean) {
+  if (touch && dismissed.delete(id)) store.set('dismissed', [...dismissed])
   let d = docs.find(d => d.id === id)
   if (!d) docs.push(d = { id, title: '', at: 0 })
   if (title != null) d.title = title
@@ -63,24 +66,31 @@ function renderList() {
   list.textContent = ''
   const shown = docs.some(d => d.id === current) ? docs : [...docs, { id: current, title: '', at: Infinity }]
   for (const d of [...shown].sort((a, b) => b.at - a.at)) {
+    // A row is the link plus a separate remove button (a button inside a link would also open it).
+    const row = document.createElement('div')
+    row.className = d.id === current ? 'item on' : 'item'
     const a = document.createElement('a')
     a.href = '/' + d.id
-    a.className = d.id === current ? 'on' : ''
     a.textContent = d.title || 'Untitled'
     const x = document.createElement('button')
     x.className = 'x'
     x.title = 'Remove from list'
+    x.setAttribute('aria-label', `Remove ${a.textContent} from list`)
     x.textContent = '×'
-    x.onclick = e => {
-      e.preventDefault()
-      docs = docs.filter(o => o.id !== d.id)
-      store.set('docs', docs)
-      if (d.id === current) go(randomId(12))
-      else renderList()
-    }
-    a.append(x)
-    list.append(a)
+    x.onclick = () => removeFromList(d.id)
+    row.append(a, x)
+    list.append(row)
   }
+}
+
+/** Forgets a document in this browser (it isn't deleted; the link still works). */
+function removeFromList(id: string) {
+  docs = docs.filter(d => d.id !== id)
+  dismissed.add(id)
+  store.set('docs', docs)
+  store.set('dismissed', [...dismissed])
+  if (id === current) go(randomId(12))
+  else renderList()
 }
 
 async function refreshTitles() {
@@ -102,7 +112,7 @@ function discoverLinks(md: string) {
   for (const [, host, abs, rel] of md.matchAll(re)) {
     if (host && host !== location.host) continue
     const id = abs || rel
-    if (id === current || docs.some(d => d.id === id)) continue
+    if (id === current || dismissed.has(id) || docs.some(d => d.id === id)) continue
     docs.push({ id, title: '', at: 0 })
     added = true
   }
@@ -319,7 +329,7 @@ function onTextChanged() {
   const md = view.state.doc.toString()
   const title = titleOf(md)
   document.title = (title || 'Untitled') + ' · SharedMarkdown'
-  if (md.trim() || docs.some(d => d.id === current)) remember(current, title, false)
+  if ((md.trim() || docs.some(d => d.id === current)) && !dismissed.has(current)) remember(current, title, false)
   discoverLinks(md)
 }
 
