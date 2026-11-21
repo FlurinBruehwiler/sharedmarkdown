@@ -130,6 +130,12 @@ export class Rga {
     return changes
   }
 
+  /** Whether items (c, k .. k + n - 1) all exist (deleted or not). */
+  has(c: string, k: number, n = 1) {
+    for (let j = 0; j < n; j++) if (!this.byId.has(key(c, k + j))) return false
+    return true
+  }
+
   /** Id of the visible character just before text position `pos` (null at the start): a cursor anchor that survives edits. */
   idAt(pos: number): Id | null {
     if (pos <= 0) return null
@@ -171,6 +177,53 @@ export class Rga {
     this.cache = null
     return ops
   }
+}
+
+/**
+ * Applies ops that may come out of causal order (unsent ops of several tabs, kept offline): retries the
+ * ones whose origin is missing until nothing changes. Returns the ops in an order that applies cleanly,
+ * and whether all of them did (false if some reference characters that aren't there, e.g. because the
+ * server compacted the document since).
+ */
+export function applyAll(rga: Rga, ops: Op[]): { ok: boolean, applied: Op[] } {
+  const applied: Op[] = []
+  let left = ops
+  while (left.length) {
+    const failed: Op[] = []
+    for (const op of left) {
+      // A delete whose characters aren't there yet would be skipped for good: wait for their insert.
+      if (op[0] === 'd' && !rga.has(op[1], op[2], op[3])) { failed.push(op); continue }
+      try { rga.apply([op]); applied.push(op) } catch { failed.push(op) }
+    }
+    if (failed.length === left.length) return { ok: false, applied }
+    left = failed
+  }
+  return { ok: true, applied }
+}
+
+/**
+ * Merges adjacent ops that continue each other (typing a word gives one insert per key; a run is
+ * equivalent, since each character of a run goes right after the previous one). Keeps outboxes that
+ * grew offline small.
+ */
+export function compactOps(ops: Op[]): Op[] {
+  const out: Op[] = []
+  for (const op of ops) {
+    const last = out[out.length - 1]
+    if (last && last[0] === 'i' && op[0] === 'i' && op[1] === last[1] && op[2] === last[2] + last[5].length
+      && op[3] === last[1] && op[4] === op[2] - 1) out[out.length - 1] = ['i', last[1], last[2], last[3], last[4], last[5] + op[5]]
+    else if (last && last[0] === 'd' && op[0] === 'd' && op[1] === last[1] && op[2] === last[2] + last[3])
+      out[out.length - 1] = ['d', last[1], last[2], last[3] + op[3]]
+    else out.push(op)
+  }
+  return out
+}
+
+/** Splits off a first batch of ops of at most about `max` bytes of JSON (the hub refuses messages over 512 KiB). */
+export function firstBatch(ops: Op[], max = 128 * 1024): [batch: Op[], rest: Op[]] {
+  let size = 0, n = 0
+  while (n < ops.length && (n === 0 || size + JSON.stringify(ops[n]).length <= max)) size += JSON.stringify(ops[n++]).length
+  return [ops.slice(0, n), ops.slice(n)]
 }
 
 /** Single-splice diff: common prefix and suffix. */
