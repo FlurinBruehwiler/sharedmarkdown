@@ -76,7 +76,7 @@ export class Sidebar {
     const current = this.opts.current()
     const list = this.opts.el
     list.textContent = ''
-    const shown = this.docs.some(d => d.key === current) ? this.docs : [...this.docs, { key: current, title: '', at: Infinity }]
+    const shown = this.docs.some(d => d.key === current) || this.dismissed.has(current) ? this.docs : [...this.docs, { key: current, title: '', at: Infinity }]
     for (const d of [...shown].sort((a, b) => b.at - a.at)) {
       // A row is the link plus a separate remove button (a button inside a link would also open it).
       const row = document.createElement('div')
