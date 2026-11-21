@@ -3,7 +3,7 @@
 // headings, quotes and rules reveal their syntax for the whole line; inline elements (emphasis,
 // code, links, images) and list/task markers only while the cursor or selection touches them.
 import { Decoration, ViewPlugin, WidgetType, EditorView, type DecorationSet, type ViewUpdate } from '@codemirror/view'
-import type { Extension, Range } from '@codemirror/state'
+import { EditorSelection, type EditorState, type Extension, type Range } from '@codemirror/state'
 import { syntaxTree } from '@codemirror/language'
 import type { SyntaxNode } from '@lezer/common'
 import { tables } from './table'
@@ -15,22 +15,25 @@ const uploadTimeout = 2 * 60 * 1000
 class ImageWidget extends WidgetType {
   src: string
   alt: string
-  constructor(src: string, alt: string) { super(); this.src = src; this.alt = alt }
-  override eq(o: ImageWidget) { return o.src === this.src && o.alt === this.alt }
+  selected: boolean
+  constructor(src: string, alt: string, selected = false) { super(); this.src = src; this.alt = alt; this.selected = selected }
+  override eq(o: ImageWidget) { return o.src === this.src && o.alt === this.alt && o.selected === this.selected }
+  // Let the editor see clicks on the image, so they select it (see the mousedown handler below).
+  override ignoreEvent(e: Event) { return e.type !== 'mousedown' }
   toDOM() {
     const local = localImages.get(this.src)
     if (!local && this.src.startsWith('upload:')) {
       // Someone else's image that is still uploading (or whose tab closed mid-upload).
       const started = uploadStarted(this.src) ?? Date.now()
       const box = document.createElement('span')
-      box.className = 'cm-img-pending'
+      box.className = this.selected ? 'cm-img-pending cm-img-selected' : 'cm-img-pending'
       box.textContent = Date.now() - started > uploadTimeout ? "Image upload didn't finish" : 'Uploading image…'
       return box
     }
     const img = document.createElement('img')
     img.src = local ?? this.src
     img.alt = this.alt
-    img.className = 'cm-img'
+    img.className = this.selected ? 'cm-img cm-img-selected' : 'cm-img'
     return img
   }
 }
@@ -258,8 +261,10 @@ function build(view: EditorView): DecorationSet {
             if (!url) break
             const src = doc.sliceString(url.from, url.to)
             const alt = marks.length > 1 ? doc.sliceString(marks[0].to, marks[1].from) : ''
-            const widget = new ImageWidget(src, alt)
-            if (touches(n.from, n.to)) {
+            // Selected as a whole (a click on it): stays an image, outlined, so Backspace/Delete removes it.
+            const selected = view.hasFocus && state.selection.ranges.some(r => r.from === n.from && r.to === n.to)
+            const widget = new ImageWidget(src, alt, selected)
+            if (!selected && touches(n.from, n.to)) {
               decos.push(mark('cm-meta').range(n.from, n.to))
               decos.push(Decoration.widget({ widget, side: 1 }).range(n.to))
             } else decos.push(Decoration.replace({ widget }).range(n.from, n.to))
@@ -270,6 +275,27 @@ function build(view: EditorView): DecorationSet {
     })
   }
   return Decoration.set(decos, true)
+}
+
+function imageAt(state: EditorState, pos: number) {
+  for (const side of [1, -1] as const)
+    for (let n: SyntaxNode | null = syntaxTree(state).resolveInner(pos, side); n; n = n.parent)
+      if (n.name === 'Image') return n
+  return null
+}
+
+/** Backspace/Delete on a selected image removes it, and its line if it stood alone there. */
+export function deleteSelectedImage(view: EditorView) {
+  const { state } = view
+  const sel = state.selection.main
+  const img = sel.empty ? null : imageAt(state, sel.from)
+  if (!img || img.from !== sel.from || img.to !== sel.to) return false
+  const line = state.doc.lineAt(img.from)
+  const alone = line.text.trim() === state.doc.sliceString(img.from, img.to) && line.to === state.doc.lineAt(img.to).to
+  const from = alone ? (line.number > 1 ? line.from - 1 : line.from) : img.from
+  const to = alone && line.number === 1 && line.to < state.doc.length ? line.to + 1 : alone ? line.to : img.to
+  view.dispatch({ changes: { from, to }, selection: { anchor: from }, userEvent: 'delete.selection', scrollIntoView: true })
+  return true
 }
 
 export function livePreview(openLink: (href: string) => void): Extension {
@@ -284,7 +310,17 @@ export function livePreview(openLink: (href: string) => void): Extension {
       }
     }, { decorations: v => v.decorations }),
     EditorView.domEventHandlers({
-      mousedown(e) {
+      mousedown(e, view) {
+        const pic = e.target instanceof Element ? e.target.closest('.cm-img, .cm-img-pending') : null
+        if (pic && e.button === 0) {
+          const img = imageAt(view.state, view.posAtDOM(pic))
+          if (img) {
+            e.preventDefault()
+            view.dispatch({ selection: EditorSelection.single(img.from, img.to) })
+            view.focus()
+            return true
+          }
+        }
         const a = e.target instanceof Element ? e.target.closest<HTMLElement>('.cm-live[data-href]') : null
         if (!a || e.button !== 0) return false
         e.preventDefault()

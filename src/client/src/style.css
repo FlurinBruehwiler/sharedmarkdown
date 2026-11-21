@@ -206,7 +206,8 @@ body.readonly #ro { display: inline; }
   display: flex; align-items: center; justify-content: center; height: 120px; margin: 4px 0;
   border: 1px dashed var(--line); border-radius: 6px; color: var(--muted); font-size: 14px;
 }
-#editor .cm-img { display: block; max-width: 100%; border-radius: 6px; margin: 4px 0; }
+#editor .cm-img { display: block; max-width: 100%; border-radius: 6px; margin: 4px 0; cursor: default; user-select: none; }
+#editor .cm-img-selected { outline: 2px solid var(--accent); outline-offset: 2px; }
 #editor .cm-hr { background: linear-gradient(var(--line), var(--line)) center / 100% 1px no-repeat; }
 #editor .cm-hr-text { color: transparent; }
 #editor .cm-ghost { position: relative; border-left: 2px solid var(--ghost); margin: 0 -1px; pointer-events: none; }

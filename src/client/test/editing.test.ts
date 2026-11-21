@@ -5,6 +5,7 @@ import { EditorSelection, EditorState, Transaction, type TransactionSpec } from 
 import { indentLess, indentMore, insertNewlineAndIndent } from '@codemirror/commands'
 import { ensureSyntaxTree } from '@codemirror/language'
 import { backspace, enter, insertInline, insertTask, markdown, wrap } from '../src/editor'
+import { deleteSelectedImage } from '../src/livepreview'
 
 type View = { state: EditorState, dispatch: (...specs: (Transaction | TransactionSpec)[]) => void }
 type Cmd = (view: never) => boolean
@@ -70,6 +71,11 @@ const cases: [string, Cmd, string, string][] = [
   ['The checkbox command after text starts a new line', task, 'Groceries|', 'Groceries\n- [ ] |'],
   ['The link command puts the cursor in the link text', inline('[]()', 1), 'See |', 'See [|]()'],
   ['The image command puts the cursor in the URL', inline('![]()', 4), '|', '![](|)'],
+  ['Deleting a selected image alone on its line removes the line', deleteSelectedImage as Cmd, 'Before\n|![a](/b/1)|\nAfter', 'Before|\nAfter'],
+  ['Deleting a selected image on the first line removes the line', deleteSelectedImage as Cmd, '|![a](/b/1)|\nAfter', '|After'],
+  ['Deleting the only content leaves an empty document', deleteSelectedImage as Cmd, '|![a](/b/1)|', '|'],
+  ['Deleting a selected image within text keeps the text', deleteSelectedImage as Cmd, 'See |![a](/b/1)| here', 'See | here'],
+  ['Delete does nothing special when the selection is not exactly an image', deleteSelectedImage as Cmd, '|See ![a](/b/1)|', '|See ![a](/b/1)|'],
 ]
 
 for (const [name, cmd, before, after] of cases)

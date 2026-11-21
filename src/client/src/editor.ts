@@ -4,7 +4,7 @@ import { history as undoHistory, defaultKeymap, historyKeymap, indentWithTab } f
 import { Language, LanguageSupport } from '@codemirror/language'
 import { markdownLanguage, insertNewlineContinueMarkupCommand, deleteMarkupBackward } from '@codemirror/lang-markdown'
 import type { DelimiterType, InlineContext, MarkdownConfig, MarkdownParser } from '@lezer/markdown'
-import { livePreview } from './livepreview'
+import { deleteSelectedImage, livePreview } from './livepreview'
 import { blankBefore, insertTable, tableArrow, tableEnter } from './table'
 import { slashMenu } from './slash'
 import { dropPos, fileDrops, insertImages, pickImages, type ImageContext } from './images'
@@ -202,7 +202,8 @@ export function createEditor(opts: EditorOptions) {
       { key: 'Enter', run: v => tableEnter(v) || enter(v) },
       { key: 'ArrowDown', run: tableArrow(true) },
       { key: 'ArrowUp', run: tableArrow(false) },
-      { key: 'Backspace', run: backspace },
+      { key: 'Backspace', run: v => deleteSelectedImage(v) || backspace(v) },
+      { key: 'Delete', run: deleteSelectedImage },
       { key: 'Mod-b', run: wrap('**') },
       { key: 'Mod-i', run: wrap('*') },
       { key: 'Mod-Shift-h', run: wrap('==') },
