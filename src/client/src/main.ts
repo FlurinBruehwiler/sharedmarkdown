@@ -5,7 +5,8 @@ import { Language, LanguageSupport } from '@codemirror/language'
 import { markdownLanguage, insertNewlineContinueMarkup, deleteMarkupBackward } from '@codemirror/lang-markdown'
 import type { MarkdownParser } from '@lezer/markdown'
 import { livePreview, Highlight, localImages } from './livepreview'
-import { tableEnter, tableTab, tableArrow } from './table'
+import { tableEnter, tableArrow, insertTable } from './table'
+import { slashMenu } from './slash'
 import { Hub } from './hub'
 import { DocSync } from './sync'
 
@@ -285,17 +286,55 @@ function pasteLink(view: EditorView, text: string) {
 // lang-markdown types its language's parser as a plain lezer Parser; it is a MarkdownParser.
 const markdown = new Language(markdownLanguage.data, (markdownLanguage.parser as MarkdownParser).configure([Highlight]), [], 'markdown')
 
+/** A blank line before `from` when it follows text (a table or `---` would otherwise attach to it). */
+const blankBefore = (view: EditorView, from: number) => {
+  const line = view.state.doc.lineAt(from)
+  return line.number > 1 && from === line.from && view.state.doc.line(line.number - 1).text.trim() ? '\n' : ''
+}
+
+const slashItems = slashMenu([
+  {
+    label: 'Table', hint: '3 columns, a header and 2 rows', icon: '▦', keywords: 'grid columns rows',
+    run: (view, from, to) => insertTable(view, from, to, [['Column 1', 'Column 2', 'Column 3'], ['', '', ''], ['', '', '']]),
+  },
+  {
+    label: 'Code block', hint: 'Monospace, keeps spacing', icon: '{ }', keywords: 'code fence snippet',
+    run: (view, from, to) => {
+      const lead = blankBefore(view, from)
+      view.dispatch({ changes: { from, to, insert: lead + '```\n\n```' }, selection: { anchor: from + lead.length + 4 }, userEvent: 'input' })
+    },
+  },
+  {
+    label: 'Divider', hint: 'A horizontal line', icon: '—', keywords: 'rule hr line separator',
+    run: (view, from, to) => {
+      const lead = blankBefore(view, from)
+      view.dispatch({ changes: { from, to, insert: lead + '---\n' }, selection: { anchor: from + lead.length + 4 }, userEvent: 'input' })
+    },
+  },
+  {
+    label: 'Image', hint: 'Upload from this device', icon: '▣', keywords: 'picture photo upload',
+    run: (view, from, to) => {
+      view.dispatch({ changes: { from, to }, selection: { anchor: from } })
+      const input = document.createElement('input')
+      input.type = 'file'
+      input.accept = 'image/png,image/jpeg,image/gif,image/webp'
+      input.multiple = true
+      input.onchange = () => { if (input.files?.length) insertImages(view, input.files) }
+      input.click()
+    },
+  },
+])
+
 const extensions = [
+  slashItems,
   sync.extension(),
   new LanguageSupport(markdown),
   livePreview(openLink),
   undoHistory(),
   keymap.of([
     { key: 'Enter', run: v => tableEnter(v) || enter(v) },
-    { key: 'Tab', run: tableTab(1) },
     { key: 'ArrowDown', run: tableArrow(true) },
     { key: 'ArrowUp', run: tableArrow(false) },
-    { key: 'Shift-Tab', run: tableTab(-1) },
     { key: 'Backspace', run: deleteMarkupBackward },
     { key: 'Mod-b', run: wrap('**') },
     { key: 'Mod-i', run: wrap('*') },
@@ -329,6 +368,8 @@ const extensions = [
 ]
 
 const view = new EditorView({ parent: $('#editor'), state: EditorState.create({ extensions }) })
+// For automated tests (?debug): lets a test drive the editor even in a background tab.
+if (new URLSearchParams(location.search).has('debug')) Object.assign(window, { cmView: view })
 
 function onTextChanged() {
   const md = view.state.doc.toString()
