@@ -16,12 +16,16 @@ export interface ClientEvents {
 
 export interface JoinResult { state: StateRun[], maxChars: number, maxImageDimension: number }
 /** "ok", or why the batch was refused. */
-export type SubmitStatus = 'ok' | 'invalid' | 'size' | 'create' | 'rate'
+export type SubmitStatus = 'ok' | 'invalid' | 'size' | 'create' | 'rate' | 'readonly'
 
 /** Hub methods (DocHub.cs): target -> arguments and result. */
 export interface ServerMethods {
   Version: { args: [], result: string }
   Join: { args: [id: string], result: JoinResult }
+  /** Joins through a read-only link (/r/{readId}); Submit is then refused. */
+  JoinRead: { args: [readId: string], result: JoinResult }
+  /** The joined document's read-only link id (created on first request); editors only. */
+  ReadLink: { args: [id: string], result: string }
   Submit: { args: [id: string, ops: Op[]], result: SubmitStatus }
   Cursor: { args: [client: string, clock: number], result: void }
 }

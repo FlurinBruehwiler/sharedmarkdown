@@ -3,7 +3,8 @@ import { Decoration, ViewPlugin, WidgetType, type DecorationSet, type EditorView
 import { Rga, diff, type Id, type Op, type TextChange } from './rga'
 import type { Hub, JoinResult, SubmitStatus } from './hub'
 
-const remote = Annotation.define<boolean>()
+/** Marks transactions that apply other people's changes (or the server's copy) rather than local edits. */
+export const remote = Annotation.define<boolean>()
 const cursorsChanged = StateEffect.define<null>()
 
 type Timer = ReturnType<typeof setTimeout>
@@ -60,7 +61,7 @@ export class DocSync {
       this.loaded = false
       this.outbox = []
       this.inflight = null
-      this.notice?.('This document was removed by an administrator. Changes here are no longer saved.')
+      this.notice?.('This document was removed by an administrator.' + (this.readOnly ? '' : ' Changes here are no longer saved.'))
     })
     this.notice = null      // (message, ms?) => void, set by the app
     this.clearNotice = null
@@ -104,6 +105,9 @@ export class DocSync {
     ]
   }
 
+  /** Opened through a read-only link: `id` is then "r/{readId}"; nothing is ever submitted. */
+  get readOnly() { return !!this.id?.startsWith('r/') }
+
   /** Switches to document `id`. `reset` gives the editor a fresh state once the old document is detached. */
   async open(id: string, reset: () => void) {
     this.loaded = false
@@ -130,12 +134,13 @@ export class DocSync {
     this.joining = true
     this.buffer = []
     let res: JoinResult
-    try { res = await this.hub.invoke('Join', id) }
+    try { res = this.readOnly ? await this.hub.invoke('JoinRead', id.slice(2)) : await this.hub.invoke('Join', id) }
     catch (e) {
       if (e instanceof Error && /rate/.test(e.message)) { // invoke only rejects with Errors
         this.notice?.('Opening documents too quickly, retrying in a moment…')
         this.retry(() => this.join(), 15000)
-      }
+      } else if (e instanceof Error && /not found/.test(e.message) && id === this.id)
+        this.notice?.("This view-only link doesn't work: the document doesn't exist or was removed.")
       return
     } finally { this.joining = false }
     if (id !== this.id) return
@@ -204,7 +209,7 @@ export class DocSync {
   }
 
   local(changes: ChangeSet) {
-    if (!this.loaded) return
+    if (!this.loaded || this.readOnly) return
     const list: [from: number, to: number, text: string][] = []
     changes.iterChanges((fromA, toA, _fromB, _toB, text) => list.push([fromA, toA, text.toString()]))
     // Apply back to front so earlier positions stay valid.
@@ -225,7 +230,7 @@ export class DocSync {
   }
 
   async flush() {
-    if (this.inflight || this.joining || this.deleted || !this.outbox.length || !this.hub.connected || !this.id) return
+    if (this.inflight || this.joining || this.deleted || this.readOnly || !this.outbox.length || !this.hub.connected || !this.id) return
     const batch = this.inflight = this.outbox
     this.outbox = []
     let status: SubmitStatus
@@ -267,7 +272,7 @@ export class DocSync {
   }
 
   sendCursor() {
-    if (!this.loaded || !this.hub.connected || !this.view) return
+    if (!this.loaded || !this.hub.connected || !this.view || this.readOnly) return
     const id: Id = this.rga.idAt(this.view.state.selection.main.head) || ['', 0]
     const key = id.join(':')
     if (key === this.lastCursor) return
