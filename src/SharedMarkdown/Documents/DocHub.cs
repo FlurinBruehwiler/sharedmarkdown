@@ -1,40 +1,46 @@
+using System.Security.Cryptography;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.SignalR;
 
 namespace SharedMarkdown;
 
 /// Relays RGA operations between clients editing the same document and keeps the server replica
 /// (which is what gets persisted and handed to new joiners). Merging is entirely the CRDT's job.
-public partial class DocHub(DocStore store, IpGuard guard, LimitsService limits, AppShell shell, ILogger<DocHub> log) : Hub
+/// Error and status strings are the wire contract in HubContract.cs.
+public class DocHub(DocStore store, IpGuard guard, LimitsService limits, AppShell shell, ILogger<DocHub> log) : Hub
 {
-    [GeneratedRegex("^[A-Za-z0-9]{8,32}$")]
-    public static partial Regex IdPattern();
+    /// Cursor messages relayed per connection per second; more are dropped (the client sends far fewer).
+    public const int CursorsPerSecond = 20;
 
-    /// Read-only link ids (see DocStore.EnsureReadId).
-    [GeneratedRegex("^[A-Za-z0-9]{16}$")]
-    public static partial Regex ReadIdPattern();
+    /// Per-connection state, kept in Context.Items.
+    sealed class Conn(string ip)
+    {
+        public string Ip { get; } = ip;
+        /// Counted in IpGuard's connections (released on disconnect).
+        public bool Counted;
+        /// Joined through a read-only link: receives everything, may change nothing.
+        public bool ReadOnly;
+        /// The joined document.
+        public DocState? Doc;
+        /// Random id shown to other clients (the SignalR connection id stays private).
+        public string Peer { get; } = Convert.ToHexString(RandomNumberGenerator.GetBytes(6));
+        public long CursorWindow;
+        public int Cursors;
+    }
 
-    const string DocKey = "doc", IpKey = "ip", CountedKey = "counted", ReadOnlyKey = "readonly";
-    DocState? Current => Context.Items.TryGetValue(DocKey, out var v) ? v as DocState : null;
-    /// Joined through a read-only link: receives everything, may change nothing.
-    bool ReadOnly => Context.Items.ContainsKey(ReadOnlyKey);
-    string Ip => (string)Context.Items[IpKey]!;
-
-    /// Random per-connection id shown to other clients (the SignalR connection id stays private).
-    string Peer => (string)(Context.Items.TryGetValue("peer", out var p) ? p! : Context.Items["peer"] = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(6)));
+    Conn C => (Conn)Context.Items[typeof(Conn)]!;
 
     public override Task OnConnectedAsync()
     {
-        var ip = IpGuard.IpOf(Context.GetHttpContext());
-        Context.Items[IpKey] = ip;
-        if (guard.IsBlocked(ip) || !guard.TryConnect(ip, limits.Current.MaxConnectionsPerIp))
+        var conn = new Conn(IpGuard.IpOf(Context.GetHttpContext()));
+        Context.Items[typeof(Conn)] = conn;
+        if (guard.IsBlocked(conn.Ip) || !guard.TryConnect(conn.Ip, limits.Current.MaxConnectionsPerIp))
         {
-            log.LogInformation("Refused connection from {Ip}", ip);
+            log.LogInformation("Refused connection from {Ip}", conn.Ip);
             Context.Abort();
             return Task.CompletedTask;
         }
-        Context.Items[CountedKey] = true;
+        conn.Counted = true;
         return Task.CompletedTask;
     }
 
@@ -43,92 +49,108 @@ public partial class DocHub(DocStore store, IpGuard guard, LimitsService limits,
     /// Keep this method's signature stable forever.
     public string Version() => shell.Build;
 
-    public async Task<object> Join(string id)
+    public async Task<JoinResult> Join(string id)
     {
-        if (!IdPattern().IsMatch(id)) throw new HubException("bad id");
-        if (!guard.TryTake("join", Ip, limits.Current.JoinsPerIpPerMinute, TimeSpan.FromMinutes(1)))
-            throw new HubException("rate");
-        await LeaveCurrent();
-        Context.Items.Remove(ReadOnlyKey);
-        return await JoinDoc(await store.Get(id));
+        if (!DocIds.EditId().IsMatch(id)) throw new HubException(HubErrors.BadId);
+        await Admit(readOnly: false);
+        if (store.IsDeleted(id)) throw new HubException(HubErrors.Deleted);
+        return await JoinDoc(id);
     }
 
     /// Joins through a read-only link. Same result as Join, which contains nothing that reveals the edit id.
-    public async Task<object> JoinRead(string readId)
+    public async Task<JoinResult> JoinRead(string readId)
     {
-        if (!ReadIdPattern().IsMatch(readId)) throw new HubException("bad id");
-        if (!guard.TryTake("join", Ip, limits.Current.JoinsPerIpPerMinute, TimeSpan.FromMinutes(1)))
-            throw new HubException("rate");
+        if (!DocIds.ReadId().IsMatch(readId)) throw new HubException(HubErrors.BadId);
+        await Admit(readOnly: true);
+        if (store.IsDeletedReadId(readId)) throw new HubException(HubErrors.Deleted);
+        if (await store.ResolveReadId(readId) is not string id) throw new HubException(HubErrors.NotFound);
+        return await JoinDoc(id);
+    }
+
+    /// Common to both joins: rate limit, leave the current document, set the mode.
+    async Task Admit(bool readOnly)
+    {
+        if (!guard.TryTake("join", C.Ip, limits.Current.JoinsPerIpPerMinute, TimeSpan.FromMinutes(1)))
+            throw new HubException(HubErrors.Rate);
         await LeaveCurrent();
-        // Read-only before joining the group, so there's no moment where this connection could edit.
-        Context.Items[ReadOnlyKey] = true;
-        if (await store.ResolveReadId(readId) is not string id) throw new HubException("not found");
-        return await JoinDoc(await store.Get(id));
+        // Read-only before joining the group, so there's no moment where a read-only connection could edit.
+        C.ReadOnly = readOnly;
     }
 
     /// The read-only link's id for the joined document, created on first request. Editors only.
     public async Task<string> ReadLink(string id)
     {
-        if (ReadOnly || Current is not DocState s || s.Id != id || s.Deleted) throw new HubException("invalid");
+        if (C.ReadOnly || C.Doc is not DocState s || s.Id != id) throw new HubException(HubErrors.Invalid);
         await s.Lock.WaitAsync();
         try
         {
+            if (s.Deleted) throw new HubException(HubErrors.Deleted);
             // A read link for a document nobody wrote in yet saves it, so it counts as creating one.
             if (s.IsNew)
             {
-                if (!guard.TryTake("create", Ip, limits.Current.DocumentsPerIpPerHour, TimeSpan.FromHours(1))) throw new HubException("create");
-                s.CreatorIp = Ip;
+                if (!guard.TryTake("create", C.Ip, limits.Current.DocumentsPerIpPerHour, TimeSpan.FromHours(1))) throw new HubException(HubErrors.Create);
+                s.CreatorIp = C.Ip;
             }
             return store.EnsureReadId(s);
         }
         finally { s.Lock.Release(); }
     }
 
-    async Task<object> JoinDoc(DocState s)
+    async Task<JoinResult> JoinDoc(string id)
     {
-        var id = s.Id;
-        int viewers;
-        string state;
-        await s.Lock.WaitAsync();
-        try
+        while (true)
         {
-            // Joining the group and taking the snapshot under the lock means no op falls between them.
-            // An op may still arrive before this method returns; clients buffer it (integration is idempotent).
-            await Groups.AddToGroupAsync(Context.ConnectionId, id);
-            Context.Items[DocKey] = s;
-            viewers = ++s.Viewers;
-            state = s.Doc.Encode();
+            var s = await store.Get(id);
+            int viewers;
+            string state;
+            await s.Lock.WaitAsync();
+            try
+            {
+                if (s.Deleted) throw new HubException(HubErrors.Deleted);
+                if (s.Evicted) continue; // dropped from memory after Get returned it: load it again
+                // Joining the group and taking the snapshot under the lock means no op falls between them.
+                // An op may still arrive before this method returns; clients buffer it (integration is idempotent).
+                await Groups.AddToGroupAsync(Context.ConnectionId, id);
+                C.Doc = s;
+                viewers = ++s.Viewers;
+                state = s.Doc.Encode();
+            }
+            finally { s.Lock.Release(); }
+            await Clients.Group(id).SendAsync("presence", viewers);
+            await Clients.OthersInGroup(id).SendAsync("peer"); // others re-announce their cursors
+            using var json = JsonDocument.Parse(state);
+            var l = limits.Current;
+            return new JoinResult(json.RootElement.Clone(), l.MaxDocumentChars, l.MaxImageDimension);
         }
-        finally { s.Lock.Release(); }
-        await Clients.Group(id).SendAsync("presence", viewers);
-        await Clients.OthersInGroup(id).SendAsync("peer"); // others re-announce their cursors
-        return new { state = JsonDocument.Parse(state).RootElement, maxChars = limits.Current.MaxDocumentChars, maxImageDimension = limits.Current.MaxImageDimension };
     }
 
-    /// Returns "ok", or why the batch was refused: "invalid", "size", "create" (too many new documents), "rate"
-    /// or "readonly" (joined through a read-only link; enforced here, not just in the client).
+    /// Returns SubmitStatus.Ok, or why the batch was refused (see SubmitStatus). Read-only connections are
+    /// refused here, not just in the client.
     public async Task<string> Submit(string id, JsonElement ops)
     {
-        if (ReadOnly) return "readonly";
-        if (Current is not DocState s || s.Id != id || s.Deleted) return "invalid";
+        if (C.ReadOnly) return SubmitStatus.ReadOnly;
+        if (C.Doc is not DocState s || s.Id != id) return store.IsDeleted(id) ? SubmitStatus.Deleted : SubmitStatus.Invalid;
         var l = limits.Current;
-        if (!guard.TryTake("submit", Ip, l.SubmitsPerIpPerMinute, TimeSpan.FromMinutes(1))) return "rate";
+        if (!guard.TryTake("submit", C.Ip, l.SubmitsPerIpPerMinute, TimeSpan.FromMinutes(1))) return SubmitStatus.Rate;
         await s.Lock.WaitAsync();
         try
         {
-            var creating = s.IsNew;
-            if (creating && !guard.TryTake("create", Ip, l.DocumentsPerIpPerHour, TimeSpan.FromHours(1))) return "create";
-            switch (s.Doc.Apply(ops, l.MaxDocumentChars, l.MaxDocumentItems))
+            if (s.Deleted) return SubmitStatus.Deleted;
+            switch (s.Doc.Check(ops, l.MaxDocumentChars, l.MaxDocumentItems, out var batch))
             {
-                case Rga.ApplyResult.Invalid: return "invalid";
-                case Rga.ApplyResult.TooLarge: return "size";
+                case Rga.ApplyResult.Invalid: return SubmitStatus.Invalid;
+                case Rga.ApplyResult.TooLarge: return SubmitStatus.Size;
             }
-            if (creating) s.CreatorIp = Ip;
+            // The first characters create the document; only a batch that is applied counts against the limit.
+            var creating = s.IsNew && batch!.Grow > 0;
+            if (creating && !guard.TryTake("create", C.Ip, l.DocumentsPerIpPerHour, TimeSpan.FromHours(1))) return SubmitStatus.Create;
+            s.Doc.Apply(batch!);
+            if (creating) s.CreatorIp = C.Ip;
             s.Dirty = true;
-            s.LastTouched = DateTime.UtcNow;
+            s.Touch();
             // Sent while holding the lock so every client receives ops in the order the server applied them.
             await Clients.OthersInGroup(id).SendAsync("ops", ops);
-            return "ok";
+            return SubmitStatus.Ok;
         }
         finally { s.Lock.Release(); }
     }
@@ -137,25 +159,30 @@ public partial class DocHub(DocStore store, IpGuard guard, LimitsService limits,
     /// Read-only viewers are counted in presence but their carets aren't shown.
     public async Task Cursor(string client, long clock)
     {
-        if (Current is DocState s && !ReadOnly && client.Length <= 32)
-            await Clients.OthersInGroup(s.Id).SendAsync("cursor", Peer, client, clock);
+        var c = C;
+        if (c.Doc is not DocState s || c.ReadOnly || client.Length > 32) return;
+        var now = Environment.TickCount64;
+        if (now - c.CursorWindow >= 1000) { c.CursorWindow = now; c.Cursors = 0; }
+        if (++c.Cursors > CursorsPerSecond) return;
+        await Clients.OthersInGroup(s.Id).SendAsync("cursor", c.Peer, client, clock);
     }
 
     public override async Task OnDisconnectedAsync(Exception? e)
     {
-        if (Context.Items.ContainsKey(CountedKey)) guard.Disconnect(Ip);
+        if (C.Counted) guard.Disconnect(C.Ip);
         await LeaveCurrent();
     }
 
     async Task LeaveCurrent()
     {
-        if (Current is not DocState s) return;
-        Context.Items.Remove(DocKey);
+        if (C.Doc is not DocState s) return;
+        C.Doc = null;
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, s.Id);
-        if (!ReadOnly) await Clients.Group(s.Id).SendAsync("cursor", Peer, null, 0);
+        if (!C.ReadOnly) await Clients.Group(s.Id).SendAsync("cursor", C.Peer, null, 0);
         int viewers;
         await s.Lock.WaitAsync();
-        try { viewers = --s.Viewers; s.LastTouched = DateTime.UtcNow; } finally { s.Lock.Release(); }
+        try { viewers = --s.Viewers; } finally { s.Lock.Release(); }
+        s.Touch();
         await Clients.Group(s.Id).SendAsync("presence", viewers);
     }
 }

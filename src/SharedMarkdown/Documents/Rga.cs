@@ -3,8 +3,8 @@ using System.Text.Json;
 
 namespace SharedMarkdown;
 
-/// RGA (Replicated Growable Array) sequence CRDT, Roh et al. 2011. Mirrored in client/src/rga.js;
-/// both must integrate operations identically.
+/// RGA (Replicated Growable Array) sequence CRDT, Roh et al. 2011. Mirrored in client/src/rga.ts;
+/// both must integrate operations identically (tests/SharedMarkdown.Tests/RgaParityTests.cs checks this).
 ///
 /// Every character is an item with a unique id (client, clock) where clock is a Lamport timestamp.
 /// Inserts name the item they go after (their origin); deletes only set a tombstone.
@@ -15,11 +15,29 @@ namespace SharedMarkdown;
 ///   insert: ["i", client, clock, originClient, originClock, text]  // text[j] gets id (client, clock+j), origin = previous char
 ///   delete: ["d", client, clock, count]                             // tombstones (client, clock .. clock+count-1)
 ///   state:  [[client, clock, text, deleted], ...]                   // runs of items in document order
-// Tombstones are dropped by Compacted() when a document is loaded with many of them (see DocStore).
+///
+/// Deleting an unknown id is a no-op (it may have been a tombstone dropped by Compact); inserting after an
+/// unknown origin is invalid. Clocks stay below 2^53 so they are exact JavaScript numbers.
 // TODO: use a tree/rope instead of a list if documents get much larger than the size limit.
 public class Rga
 {
     public record struct Id(string Client, long Clock);
+
+    /// Largest clock a JavaScript number holds exactly (Number.MAX_SAFE_INTEGER).
+    public const long MaxClock = (1L << 53) - 1;
+
+    internal abstract record Op;
+    internal sealed record Ins(Id Id, Id? Origin, string Text) : Op;
+    internal sealed record Del(Id Id, int Count) : Op;
+
+    /// A parsed and validated batch of ops for this replica, see Check.
+    public sealed class Batch
+    {
+        internal Batch(List<Op> ops, long grow) { Ops = ops; Grow = grow; }
+        internal readonly List<Op> Ops;
+        /// Number of new characters the batch inserts.
+        public long Grow { get; }
+    }
 
     class Item(Id id, char ch)
     {
@@ -36,128 +54,168 @@ public class Rga
     /// Stored items including deleted ones.
     public int Items => _items.Count;
 
-    /// A fresh replica holding just `text`, with no tombstones. The ids come from a new random
-    /// client name, so they can never collide with ids clients still hold from before.
-    public static Rga Compacted(string text)
+    /// Deleted items still stored.
+    public int Tombstones => _items.Count - Length;
+
+    /// Drops the tombstones; visible characters keep their ids, so clients that still hold the old state can
+    /// keep inserting after them. Only safe while no client has the document open: a client with the old
+    /// state may still name a dropped tombstone as an insert's origin, which is then refused.
+    public void Compact()
     {
-        var rga = new Rga();
-        var client = "~" + Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(6));
-        for (int i = 0; i < text.Length; i++)
-        {
-            var item = new Item(new Id(client, i + 1), text[i]);
-            rga._items.Add(item);
-            rga._byId[item.Id] = item;
-        }
-        rga.Length = text.Length;
-        return rga;
+        _items.RemoveAll(it => it.Deleted);
+        _byId.Clear();
+        foreach (var it in _items) _byId[it.Id] = it;
     }
 
     static bool Greater(Id a, Id b) => a.Clock != b.Clock ? a.Clock > b.Clock : string.CompareOrdinal(a.Client, b.Client) > 0;
 
-    void InsertOne(Id id, Id? origin, char ch)
+    /// Index right after `origin` (0 for the document start), where the scan for a new item's place starts.
+    /// `hint` is the origin's index if known.
+    int After(Id? origin, int hint)
     {
-        if (_byId.ContainsKey(id)) return; // already integrated
-        int idx = origin is { } o ? _items.IndexOf(_byId[o]) + 1 : 0;
-        while (idx < _items.Count && Greater(_items[idx].Id, id)) idx++;
-        var item = new Item(id, ch);
-        _items.Insert(idx, item);
-        _byId[id] = item;
-        Length++;
+        if (origin is not { } o) return 0;
+        var item = _byId[o];
+        return (hint >= 0 && hint < _items.Count && _items[hint] == item ? hint : _items.IndexOf(item)) + 1;
     }
 
-    /// Applies a batch of ops atomically. Returns false (and changes nothing) if an op is malformed,
-    /// references an unknown item, or would grow the document past maxLength.
-    public ApplyResult Apply(JsonElement ops, int maxLength, int maxItems)
+    /// Integrates an insert run: text[j] gets id (first.Client, first.Clock + j) and goes after text[j-1].
+    /// Equivalent to inserting the characters one at a time, but consecutive characters that land next to
+    /// each other (the usual case) go in with one InsertRange, so a paste is linear, not quadratic.
+    void InsertRun(Id first, Id? origin, string text)
     {
-        try
+        int hint = -1;
+        for (int j = 0; j < text.Length;)
         {
-            var r = Validate(ops, maxLength, maxItems);
-            if (r != ApplyResult.Ok) return r;
+            var id = first with { Clock = first.Clock + j };
+            if (_byId.ContainsKey(id)) { origin = id; hint = -1; j++; continue; } // already integrated
+            int idx = After(origin, hint);
+            while (idx < _items.Count && Greater(_items[idx].Id, id)) idx++;
+            // The following characters go right after this one unless the item now after it outranks them.
+            Id? next = idx < _items.Count ? _items[idx].Id : null;
+            int end = j + 1;
+            while (end < text.Length)
+            {
+                var nid = first with { Clock = first.Clock + end };
+                if (_byId.ContainsKey(nid) || next is { } n && Greater(n, nid)) break;
+                end++;
+            }
+            var run = new Item[end - j];
+            for (int k = 0; k < run.Length; k++)
+            {
+                run[k] = new Item(first with { Clock = first.Clock + j + k }, text[j + k]);
+                _byId[run[k].Id] = run[k];
+            }
+            _items.InsertRange(idx, run);
+            Length += run.Length;
+            origin = run[^1].Id;
+            hint = idx + run.Length - 1;
+            j = end;
         }
-        catch (Exception e) when (e is InvalidOperationException or FormatException or IndexOutOfRangeException or KeyNotFoundException) { return ApplyResult.Invalid; }
-        Integrate(ops);
-        return ApplyResult.Ok;
     }
 
     public enum ApplyResult { Ok, Invalid, TooLarge }
 
-    ApplyResult Validate(JsonElement ops, int maxLength, int maxItems)
+    /// Applies a batch of ops atomically. Returns Invalid or TooLarge (and changes nothing) if an op is
+    /// malformed, inserts after an unknown item, or would grow the document past the limits.
+    public ApplyResult Apply(JsonElement ops, int maxLength, int maxItems)
     {
-        if (ops.ValueKind != JsonValueKind.Array) return ApplyResult.Invalid;
+        var r = Check(ops, maxLength, maxItems, out var batch);
+        if (r == ApplyResult.Ok) Apply(batch!);
+        return r;
+    }
+
+    /// Parses and validates ops against the current state without changing anything. On Ok, `batch` can be
+    /// applied with Apply(Batch) as long as the replica doesn't change in between (hold the document lock).
+    public ApplyResult Check(JsonElement ops, int maxLength, int maxItems, out Batch? batch)
+    {
+        batch = null;
+        if (Parse(ops) is not { } list) return ApplyResult.Invalid;
         var added = new HashSet<Id>();
         bool Known(Id id) => _byId.ContainsKey(id) || added.Contains(id);
         long grow = 0;
-        foreach (var op in ops.EnumerateArray())
+        foreach (var op in list)
         {
-            if (op.ValueKind != JsonValueKind.Array || op.GetArrayLength() < 4) return ApplyResult.Invalid;
-            switch (op[0].GetString())
+            switch (op)
             {
-                case "i" when op.GetArrayLength() == 6:
-                {
-                    var client = op[1].GetString() ?? "";
-                    var clock = op[2].GetInt64();
-                    var oc = op[3].GetString() ?? "";
-                    var text = op[5].GetString() ?? "";
-                    if (client == "" || client.Length > 32 || clock < 1 || clock > long.MaxValue / 2) return ApplyResult.Invalid;
-                    if (oc != "" && !Known(new Id(oc, op[4].GetInt64()))) return ApplyResult.Invalid;
-                    for (int j = 0; j < text.Length; j++) added.Add(new Id(client, clock + j));
-                    grow += text.Length;
+                case Ins ins:
+                    if (ins.Id.Client.Length is 0 or > 32 || ins.Id.Clock < 1 || ins.Id.Clock > MaxClock - ins.Text.Length) return ApplyResult.Invalid;
+                    if (ins.Origin is { } o && !Known(o)) return ApplyResult.Invalid;
+                    for (int j = 0; j < ins.Text.Length; j++)
+                        if (!Known(ins.Id with { Clock = ins.Id.Clock + j }))
+                        {
+                            added.Add(ins.Id with { Clock = ins.Id.Clock + j });
+                            grow++;
+                        }
                     break;
-                }
-                case "d":
-                {
-                    var client = op[1].GetString() ?? "";
-                    var clock = op[2].GetInt64();
-                    var count = op[3].GetInt32();
-                    if (count < 1 || count > maxLength) return ApplyResult.Invalid;
-                    for (int j = 0; j < count; j++)
-                        if (!Known(new Id(client, clock + j))) return ApplyResult.Invalid;
+                case Del del:
+                    // Unknown ids are skipped when applied (already gone), but the run must be plausible.
+                    if (del.Count < 1 || del.Count > maxLength || del.Id.Clock < 1 || del.Id.Clock > MaxClock - del.Count) return ApplyResult.Invalid;
                     break;
-                }
-                default:
-                    return ApplyResult.Invalid;
             }
         }
         // Pure deletions are always allowed, so an oversized document can still be trimmed.
         if (grow > 0 && (Length + grow > maxLength || _items.Count + grow > maxItems)) return ApplyResult.TooLarge;
+        batch = new Batch(list, grow);
         return ApplyResult.Ok;
     }
 
-    void Integrate(JsonElement ops)
+    public void Apply(Batch batch)
     {
-        foreach (var op in ops.EnumerateArray())
+        foreach (var op in batch.Ops)
         {
-            switch (op[0].GetString())
+            switch (op)
             {
-                case "i" when op.GetArrayLength() == 6:
-                {
-                    var client = op[1].GetString() ?? "";
-                    var clock = op[2].GetInt64();
-                    var oc = op[3].GetString() ?? "";
-                    Id? origin = oc == "" ? null : new Id(oc, op[4].GetInt64());
-                    var text = op[5].GetString() ?? "";
-                    for (int j = 0; j < text.Length; j++)
-                    {
-                        var id = new Id(client, clock + j);
-                        InsertOne(id, origin, text[j]);
-                        origin = id;
-                    }
+                case Ins ins:
+                    InsertRun(ins.Id, ins.Origin, ins.Text);
                     break;
-                }
-                case "d":
-                {
-                    var client = op[1].GetString() ?? "";
-                    var clock = op[2].GetInt64();
-                    var count = op[3].GetInt32();
-                    for (int j = 0; j < count; j++)
-                    {
-                        var item = _byId[new Id(client, clock + j)];
-                        if (!item.Deleted) { item.Deleted = true; Length--; }
-                    }
+                case Del del:
+                    for (int j = 0; j < del.Count; j++)
+                        if (_byId.TryGetValue(del.Id with { Clock = del.Id.Clock + j }, out var item) && !item.Deleted)
+                        {
+                            item.Deleted = true;
+                            Length--;
+                        }
                     break;
+            }
+        }
+    }
+
+    /// The ops in `json`, or null if it isn't a well-formed op array.
+    static List<Op>? Parse(JsonElement json)
+    {
+        if (json.ValueKind != JsonValueKind.Array) return null;
+        var list = new List<Op>(json.GetArrayLength());
+        try
+        {
+            foreach (var op in json.EnumerateArray())
+            {
+                if (op.ValueKind != JsonValueKind.Array || op.GetArrayLength() < 1 || op[0].ValueKind != JsonValueKind.String) return null;
+                switch (op[0].GetString())
+                {
+                    case "i" when op.GetArrayLength() == 6:
+                    {
+                        if (Str(op[1]) is not { } client || Int(op[2]) is not { } clock || Str(op[3]) is not { } oc
+                            || Int(op[4]) is not { } ok || Str(op[5]) is not { } text) return null;
+                        list.Add(new Ins(new Id(client, clock), oc == "" ? null : new Id(oc, ok), text));
+                        break;
+                    }
+                    case "d" when op.GetArrayLength() == 4:
+                    {
+                        if (Str(op[1]) is not { } client || Int(op[2]) is not { } clock || Int(op[3]) is not { } count
+                            || count > int.MaxValue) return null;
+                        list.Add(new Del(new Id(client, clock), (int)count));
+                        break;
+                    }
+                    default:
+                        return null;
                 }
             }
         }
+        catch (InvalidOperationException) { return null; } // e.g. a string with an unpaired surrogate escape
+        return list;
+
+        static string? Str(JsonElement e) => e.ValueKind == JsonValueKind.String ? e.GetString() : null;
+        static long? Int(JsonElement e) => e.ValueKind == JsonValueKind.Number && e.TryGetInt64(out var v) ? v : null;
     }
 
     public string Text()

@@ -37,6 +37,15 @@ public class BlockedIp
     public DateTime CreatedAt { get; set; }
 }
 
+/// A document deleted by the admin. Its ids stay unusable, so an offline copy reconnecting later can't
+/// bring it back (the client drops its copy when told "deleted").
+public class DeletedDocument
+{
+    public required string Id { get; set; }
+    public string? ReadId { get; set; }
+    public DateTime DeletedAt { get; set; }
+}
+
 /// Small key/value store for settings changed in the admin dashboard.
 public class AppSetting
 {
@@ -50,6 +59,7 @@ public class AppDb(DbContextOptions<AppDb> options) : DbContext(options)
     public DbSet<Blob> Blobs => Set<Blob>();
     public DbSet<BlockedIp> BlockedIps => Set<BlockedIp>();
     public DbSet<AppSetting> Settings => Set<AppSetting>();
+    public DbSet<DeletedDocument> DeletedDocuments => Set<DeletedDocument>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -61,5 +71,6 @@ public class AppDb(DbContextOptions<AppDb> options) : DbContext(options)
         b.Entity<Blob>().HasIndex(x => x.UploaderIp);
         b.Entity<BlockedIp>().HasKey(x => x.Ip);
         b.Entity<AppSetting>().HasKey(x => x.Key);
+        b.Entity<DeletedDocument>().HasIndex(x => x.ReadId);
     }
 }

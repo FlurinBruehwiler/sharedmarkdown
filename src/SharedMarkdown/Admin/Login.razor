@@ -46,7 +46,7 @@
             _error = "Too many attempts, try again later.";
             return;
         }
-        if (!Program.CheckAdminPassword(Config, Password))
+        if (!AdminAuth.CheckPassword(Config, Password))
         {
             Log.LogWarning("Failed admin login from {Ip}", ip);
             _error = "Wrong password.";

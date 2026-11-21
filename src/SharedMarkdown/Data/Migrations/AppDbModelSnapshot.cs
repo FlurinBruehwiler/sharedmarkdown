@@ -83,6 +83,24 @@ namespace SharedMarkdown.Migrations
                     b.ToTable("BlockedIps");
                 });
 
+            modelBuilder.Entity("SharedMarkdown.DeletedDocument", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("DeletedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReadId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ReadId");
+
+                    b.ToTable("DeletedDocuments");
+                });
+
             modelBuilder.Entity("SharedMarkdown.Document", b =>
                 {
                     b.Property<string>("Id")
