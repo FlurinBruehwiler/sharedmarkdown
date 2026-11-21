@@ -35,9 +35,10 @@ else
             <Sparkline Values="history.Select(h => h.CpuPercent).ToList()" Times="history.Select(h => h.Time).ToList()" Max="100" Format="@(v => $"{v:0}%")" />
         </div>
         <div class="card">
-            <span>Load (1 min)</span>
+            <span title="Processes running or waiting for the CPU (or disk), averaged. Compare it to the number of cores: below that is fine, well above it for a while means work is queuing up.">Load average (1 min)</span>
             <b>@(s.Load is { } l ? l.One.ToString("0.00") : "–")</b>
             <span>@(s.Load is { } m ? $"5 min {m.Five:0.00} · 15 min {m.Fifteen:0.00}" : "not available")</span>
+            <span>Work waiting for the CPU; fine while below @s.Cores (the core count)</span>
             <Sparkline Values="history.Select(h => h.Load1).ToList()" Times="history.Select(h => h.Time).ToList()" Max="Math.Max(s.Cores, history.Select(h => h.Load1).DefaultIfEmpty().Max())" Format="@(v => v.ToString("0.00"))" />
         </div>
         <div class="card">
