@@ -4,7 +4,6 @@ using Microsoft.EntityFrameworkCore;
 
 namespace SharedMarkdown;
 
-/// Per-IP fixed-window counters, live connection counts, and the IP block list.
 public class IpGuard(IServiceScopeFactory scopes)
 {
     record struct Window(long Start, int Count);
@@ -13,10 +12,8 @@ public class IpGuard(IServiceScopeFactory scopes)
     readonly ConcurrentDictionary<string, int> _connections = new();
     volatile HashSet<string> _blocked = [];
 
-    /// Milliseconds clock; replaceable in tests.
     internal Func<long> Clock { get; set; } = () => Environment.TickCount64;
 
-    /// Counts one action; false if the IP already used `limit` actions in the current window.
     public bool TryTake(string bucket, string ip, int limit, TimeSpan window)
     {
         var now = Clock();
@@ -31,7 +28,6 @@ public class IpGuard(IServiceScopeFactory scopes)
         }
     }
 
-    /// Recent activity per IP for the dashboard.
     public int Used(string bucket, string ip) => _windows.TryGetValue((bucket, ip), out var w) ? w.Count : 0;
 
     public IEnumerable<(string Bucket, string Ip, int Count)> Activity() =>
@@ -60,7 +56,6 @@ public class IpGuard(IServiceScopeFactory scopes)
         _blocked = (await db.BlockedIps.Select(b => b.Ip).ToListAsync()).ToHashSet();
     }
 
-    /// Drops expired windows and idle connection entries so memory doesn't grow with every IP ever seen.
     public void Prune()
     {
         var now = Clock();
@@ -72,17 +67,15 @@ public class IpGuard(IServiceScopeFactory scopes)
 
     public static string IpOf(HttpContext? ctx) => IpOf(ctx?.Connection.RemoteIpAddress);
 
-    /// The key rate limits are counted under: the IPv4 address, or the IPv6 /64.
     public static string IpOf(IPAddress? ip)
     {
         if (ip is null) return "unknown";
         if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
         if (IPAddress.IsLoopback(ip)) return ip.ToString();
-        // Group IPv6 clients by /64: one household or server usually gets a whole /64.
         if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
         {
             var bytes = ip.GetAddressBytes();
-            Array.Clear(bytes, 8, 8);
+            Array.Clear(bytes, 8, 8); // one household or server usually gets a whole /64
             return new IPAddress(bytes) + "/64";
         }
         return ip.ToString();

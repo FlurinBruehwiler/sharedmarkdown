@@ -27,7 +27,6 @@ else
     const double Width = 240, Height = 40;
     [Parameter, EditorRequired] public List<double> Values { get; set; } = [];
     [Parameter, EditorRequired] public List<DateTime> Times { get; set; } = [];
-    /// Fixed top of the scale (e.g. 100 for percentages); otherwise fitted to the data.
     [Parameter] public double? Max { get; set; }
     [Parameter] public Func<double, string> Format { get; set; } = v => v.ToString("0.#");
 }

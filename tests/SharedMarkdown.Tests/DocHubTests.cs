@@ -23,7 +23,6 @@ public sealed class AppFactory : WebApplicationFactory<Program>
     }
 }
 
-/// A hub connection that records everything the server sends it.
 sealed class Client : IAsyncDisposable
 {
     public readonly HubConnection Hub;
@@ -108,7 +107,6 @@ public class DocHubTests(AppFactory app) : IClassFixture<AppFactory>
         Assert.Equal("hello?", (await app.Services.GetRequiredService<DocStore>().Get(id)).Doc.Text());
     }
 
-    // B6: a deleted document can't come back through a reconnecting client.
     [Fact]
     public async Task DeletedDocumentsStayDeleted()
     {
@@ -141,7 +139,6 @@ public class DocHubTests(AppFactory app) : IClassFixture<AppFactory>
         Assert.True(result.GetProperty("maxImageDimension").GetInt32() > 0);
     }
 
-    // B9: a refused batch doesn't use up the "new documents" allowance.
     [Fact]
     public async Task OnlyAppliedBatchesCountAsCreatingADocument()
     {
@@ -170,9 +167,9 @@ public class DocHubTests(AppFactory app) : IClassFixture<AppFactory>
         await a.Hub.InvokeAsync<JoinResult>("Join", id);
         await b.Hub.InvokeAsync<JoinResult>("Join", id);
         for (int i = 0; i < DocHub.CursorsPerSecond * 3; i++) await a.Hub.InvokeAsync("Cursor", "x", (long)i);
-        await b.Hub.InvokeAsync<string>("Version"); // a round trip, so relayed cursors have arrived
+        await b.Hub.InvokeAsync<string>("Version");
         await Task.Delay(200);
         var relayed = b.Received.Count(r => r.Method == "cursor");
-        Assert.InRange(relayed, 1, DocHub.CursorsPerSecond * 2); // at most two windows' worth if the loop crossed a second
+        Assert.InRange(relayed, 1, DocHub.CursorsPerSecond * 2);
     }
 }

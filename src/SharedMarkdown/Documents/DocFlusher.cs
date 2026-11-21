@@ -1,10 +1,5 @@
 namespace SharedMarkdown;
 
-/// Saves changed documents every 2 s and once more at shutdown.
-///
-/// The final flush runs in StoppedAsync, i.e. after every hosted service has stopped, including the web
-/// server: hosted services stop in reverse registration order and the server was registered first, so a
-/// flush in StopAsync would still be followed by Submits that are then lost.
 public class DocFlusher(DocStore store, IpGuard guard, ILogger<DocFlusher> log) : BackgroundService, IHostedLifecycleService
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -23,6 +18,7 @@ public class DocFlusher(DocStore store, IpGuard guard, ILogger<DocFlusher> log) 
         catch (OperationCanceledException) { }
     }
 
+    // Not StopAsync: the web server stops after the other hosted services, so Submits could still arrive after that flush.
     public async Task StoppedAsync(CancellationToken ct)
     {
         try
@@ -30,7 +26,7 @@ public class DocFlusher(DocStore store, IpGuard guard, ILogger<DocFlusher> log) 
             await store.Flush(evict: false);
             log.LogInformation("Saved documents at shutdown");
         }
-        catch (ObjectDisposedException) { } // stopped again after disposal (WebApplicationFactory does that); already saved
+        catch (ObjectDisposedException) { } // WebApplicationFactory stops the host again after disposing it
     }
 
     public Task StartingAsync(CancellationToken ct) => Task.CompletedTask;

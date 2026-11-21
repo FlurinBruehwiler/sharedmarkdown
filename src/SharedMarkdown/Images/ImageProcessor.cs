@@ -4,12 +4,9 @@ namespace SharedMarkdown;
 
 public record ProcessedImage(byte[] Data, string ContentType, int Width, int Height);
 
-/// Validates uploads by actually decoding them, scales large images down and re-encodes them.
-/// Re-encoding drops all metadata (EXIF GPS position, camera serials, ...), which matters
-/// because documents are shared by link.
 public static class ImageProcessor
 {
-    const long MaxPixels = 50_000_000; // refuse decompression bombs before decoding
+    const long MaxPixels = 50_000_000; // refuses decompression bombs before decoding
 
     public static ProcessedImage? Process(byte[] input, int maxDimension)
     {
@@ -19,8 +16,7 @@ public static class ImageProcessor
         var info = codec.Info;
         if (info.Width <= 0 || info.Height <= 0 || (long)info.Width * info.Height > MaxPixels) return null;
 
-        // Animated GIFs can't be re-encoded by Skia; keep them as they are (GIF has no EXIF),
-        // the upload size limit still applies.
+        // Re-encoding drops all metadata (EXIF GPS etc.). Skia can't encode GIF, but GIF carries no EXIF.
         if (codec.EncodedFormat == SKEncodedImageFormat.Gif)
             return new ProcessedImage(input, "image/gif", info.Width, info.Height);
 
@@ -42,9 +38,7 @@ public static class ImageProcessor
 
         try
         {
-            // WebP stays WebP. PNG stays PNG for screenshots and anything transparent, but a photo
-            // that arrived as PNG (browsers put copied images on the clipboard as PNG, ~10x larger
-            // than JPEG) is stored as JPEG. Photos compress badly as PNG: > 1 byte per pixel.
+            // Browsers paste copied photos as PNG, ~10x larger than JPEG.
             var photoAsPng = codec.EncodedFormat == SKEncodedImageFormat.Png
                 && (double)input.Length / ((long)info.Width * info.Height) > 1.0
                 && IsOpaque(bitmap);
@@ -72,20 +66,19 @@ public static class ImageProcessor
         return true;
     }
 
-    /// Bakes the EXIF rotation into the pixels, since the EXIF data itself is dropped.
-    /// Each case maps source (x, y) to destination (x', y'): x' = a*x + b*y + c, y' = d*x + e*y + f.
     static SKBitmap ApplyOrientation(SKBitmap src, SKEncodedOrigin origin)
     {
         float w = src.Width, h = src.Height;
+        // x' = a*x + b*y + c, y' = d*x + e*y + f
         (float a, float b, float c, float d, float e, float f)? m = origin switch
         {
-            SKEncodedOrigin.TopRight => (-1, 0, w, 0, 1, 0),     // mirrored
-            SKEncodedOrigin.BottomRight => (-1, 0, w, 0, -1, h), // rotated 180
-            SKEncodedOrigin.BottomLeft => (1, 0, 0, 0, -1, h),   // flipped vertically
-            SKEncodedOrigin.LeftTop => (0, 1, 0, 1, 0, 0),       // transposed
-            SKEncodedOrigin.RightTop => (0, -1, h, 1, 0, 0),     // rotated 90 clockwise
-            SKEncodedOrigin.RightBottom => (0, -1, h, -1, 0, w), // transverse
-            SKEncodedOrigin.LeftBottom => (0, 1, 0, -1, 0, w),   // rotated 90 counter-clockwise
+            SKEncodedOrigin.TopRight => (-1, 0, w, 0, 1, 0),
+            SKEncodedOrigin.BottomRight => (-1, 0, w, 0, -1, h),
+            SKEncodedOrigin.BottomLeft => (1, 0, 0, 0, -1, h),
+            SKEncodedOrigin.LeftTop => (0, 1, 0, 1, 0, 0),
+            SKEncodedOrigin.RightTop => (0, -1, h, 1, 0, 0),
+            SKEncodedOrigin.RightBottom => (0, -1, h, -1, 0, w),
+            SKEncodedOrigin.LeftBottom => (0, 1, 0, -1, 0, w),
             _ => null,
         };
         if (m is not { } t) return src.Copy();
@@ -94,7 +87,7 @@ public static class ImageProcessor
         using var canvas = new SKCanvas(dst);
         canvas.SetMatrix(new SKMatrix(t.a, t.b, t.c, t.d, t.e, t.f, 0, 0, 1));
         using var image = SKImage.FromBitmap(src);
-        canvas.DrawImage(image, 0, 0, new SKSamplingOptions(SKFilterMode.Nearest)); // exact 90° steps: no resampling
+        canvas.DrawImage(image, 0, 0, new SKSamplingOptions(SKFilterMode.Nearest));
 
         return dst;
     }

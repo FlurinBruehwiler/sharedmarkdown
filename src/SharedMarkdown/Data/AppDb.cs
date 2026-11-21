@@ -5,14 +5,10 @@ namespace SharedMarkdown;
 public class Document
 {
     public required string Id { get; set; }
-    /// Serialized RGA state (see Rga.Encode), the source of truth.
     public string State { get; set; } = "";
-    /// Plain markdown derived from State, kept for titles, search and export.
     public string Content { get; set; } = "";
     public string Title { get; set; } = "";
-    /// IP that created the document, for abuse handling.
     public string CreatorIp { get; set; } = "";
-    /// Separate random id for the read-only link (/r/{ReadId}); null until someone asks for one.
     public string? ReadId { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
@@ -20,7 +16,6 @@ public class Document
 
 public class Blob
 {
-    // SHA-256 of the stored content (hex), so identical uploads are stored once.
     public required string Id { get; set; }
     public required string ContentType { get; set; }
     public required byte[] Data { get; set; }
@@ -37,8 +32,6 @@ public class BlockedIp
     public DateTime CreatedAt { get; set; }
 }
 
-/// A document deleted by the admin. Its ids stay unusable, so an offline copy reconnecting later can't
-/// bring it back (the client drops its copy when told "deleted").
 public class DeletedDocument
 {
     public required string Id { get; set; }
@@ -46,7 +39,6 @@ public class DeletedDocument
     public DateTime DeletedAt { get; set; }
 }
 
-/// Small key/value store for settings changed in the admin dashboard.
 public class AppSetting
 {
     public required string Key { get; set; }

@@ -3,39 +3,26 @@ using System.Text.Json;
 
 namespace SharedMarkdown;
 
-/// RGA (Replicated Growable Array) sequence CRDT, Roh et al. 2011. Mirrored in client/src/rga.ts;
-/// both must integrate operations identically (tests/SharedMarkdown.Tests/RgaParityTests.cs checks this).
-///
-/// Every character is an item with a unique id (client, clock) where clock is a Lamport timestamp.
-/// Inserts name the item they go after (their origin); deletes only set a tombstone.
-/// Concurrent inserts after the same origin are ordered by descending id, which makes
-/// every replica converge regardless of the order ops arrive in.
-///
-/// Wire format (JSON arrays, runs to keep messages small):
-///   insert: ["i", client, clock, originClient, originClock, text]  // text[j] gets id (client, clock+j), origin = previous char
-///   delete: ["d", client, clock, count]                             // tombstones (client, clock .. clock+count-1)
-///   state:  [[client, clock, text, deleted], ...]                   // runs of items in document order
-///
-/// Deleting an unknown id is a no-op (it may have been a tombstone dropped by Compact); inserting after an
-/// unknown origin is invalid. Clocks stay below 2^53 so they are exact JavaScript numbers.
+// RGA sequence CRDT (Roh et al. 2011). Must integrate ops exactly like src/client/src/rga.ts (RgaTests replays its sessions).
+// Ids are (client, Lamport clock); concurrent inserts after the same origin are ordered by descending id, so replicas converge.
+// Wire format: insert ["i", client, clock, originClient, originClock, text] (text[j] gets clock+j, after text[j-1]);
+// delete ["d", client, clock, count]; state [[client, clock, text, deleted], ...] in document order.
+// Deleting an unknown id is a no-op (maybe a compacted tombstone); inserting after an unknown origin is invalid.
 // TODO: use a tree/rope instead of a list if documents get much larger than the size limit.
 public class Rga
 {
     public record struct Id(string Client, long Clock);
 
-    /// Largest clock a JavaScript number holds exactly (Number.MAX_SAFE_INTEGER).
-    public const long MaxClock = (1L << 53) - 1;
+    public const long MaxClock = (1L << 53) - 1; // Number.MAX_SAFE_INTEGER: a larger clock would poison JS clients
 
     internal abstract record Op;
     internal sealed record Ins(Id Id, Id? Origin, string Text) : Op;
     internal sealed record Del(Id Id, int Count) : Op;
 
-    /// A parsed and validated batch of ops for this replica, see Check.
     public sealed class Batch
     {
         internal Batch(List<Op> ops, long grow) { Ops = ops; Grow = grow; }
         internal readonly List<Op> Ops;
-        /// Number of new characters the batch inserts.
         public long Grow { get; }
     }
 
@@ -51,15 +38,11 @@ public class Rga
 
     public int Length { get; private set; }
 
-    /// Stored items including deleted ones.
     public int Items => _items.Count;
 
-    /// Deleted items still stored.
     public int Tombstones => _items.Count - Length;
 
-    /// Drops the tombstones; visible characters keep their ids, so clients that still hold the old state can
-    /// keep inserting after them. Only safe while no client has the document open: a client with the old
-    /// state may still name a dropped tombstone as an insert's origin, which is then refused.
+    // Keeps visible ids so offline clients can still insert after them; only safe while nobody has the document open.
     public void Compact()
     {
         _items.RemoveAll(it => it.Deleted);
@@ -69,8 +52,6 @@ public class Rga
 
     static bool Greater(Id a, Id b) => a.Clock != b.Clock ? a.Clock > b.Clock : string.CompareOrdinal(a.Client, b.Client) > 0;
 
-    /// Index right after `origin` (0 for the document start), where the scan for a new item's place starts.
-    /// `hint` is the origin's index if known.
     int After(Id? origin, int hint)
     {
         if (origin is not { } o) return 0;
@@ -78,19 +59,15 @@ public class Rga
         return (hint >= 0 && hint < _items.Count && _items[hint] == item ? hint : _items.IndexOf(item)) + 1;
     }
 
-    /// Integrates an insert run: text[j] gets id (first.Client, first.Clock + j) and goes after text[j-1].
-    /// Equivalent to inserting the characters one at a time, but consecutive characters that land next to
-    /// each other (the usual case) go in with one InsertRange, so a paste is linear, not quadratic.
     void InsertRun(Id first, Id? origin, string text)
     {
         int hint = -1;
         for (int j = 0; j < text.Length;)
         {
             var id = first with { Clock = first.Clock + j };
-            if (_byId.ContainsKey(id)) { origin = id; hint = -1; j++; continue; } // already integrated
+            if (_byId.ContainsKey(id)) { origin = id; hint = -1; j++; continue; }
             int idx = After(origin, hint);
             while (idx < _items.Count && Greater(_items[idx].Id, id)) idx++;
-            // The following characters go right after this one unless the item now after it outranks them.
             Id? next = idx < _items.Count ? _items[idx].Id : null;
             int end = j + 1;
             while (end < text.Length)
@@ -115,8 +92,6 @@ public class Rga
 
     public enum ApplyResult { Ok, Invalid, TooLarge }
 
-    /// Applies a batch of ops atomically. Returns Invalid or TooLarge (and changes nothing) if an op is
-    /// malformed, inserts after an unknown item, or would grow the document past the limits.
     public ApplyResult Apply(JsonElement ops, int maxLength, int maxItems)
     {
         var r = Check(ops, maxLength, maxItems, out var batch);
@@ -124,8 +99,6 @@ public class Rga
         return r;
     }
 
-    /// Parses and validates ops against the current state without changing anything. On Ok, `batch` can be
-    /// applied with Apply(Batch) as long as the replica doesn't change in between (hold the document lock).
     public ApplyResult Check(JsonElement ops, int maxLength, int maxItems, out Batch? batch)
     {
         batch = null;
@@ -148,7 +121,6 @@ public class Rga
                         }
                     break;
                 case Del del:
-                    // Unknown ids are skipped when applied (already gone), but the run must be plausible.
                     if (del.Count < 1 || del.Count > maxLength || del.Id.Clock < 1 || del.Id.Clock > MaxClock - del.Count) return ApplyResult.Invalid;
                     break;
             }
@@ -180,7 +152,6 @@ public class Rga
         }
     }
 
-    /// The ops in `json`, or null if it isn't a well-formed op array.
     static List<Op>? Parse(JsonElement json)
     {
         if (json.ValueKind != JsonValueKind.Array) return null;
@@ -211,7 +182,7 @@ public class Rga
                 }
             }
         }
-        catch (InvalidOperationException) { return null; } // e.g. a string with an unpaired surrogate escape
+        catch (InvalidOperationException) { return null; }
         return list;
 
         static string? Str(JsonElement e) => e.ValueKind == JsonValueKind.String ? e.GetString() : null;
@@ -225,7 +196,6 @@ public class Rga
         return sb.ToString();
     }
 
-    /// Run-length encoded state in document order, see the class comment.
     public string Encode()
     {
         using var ms = new MemoryStream();

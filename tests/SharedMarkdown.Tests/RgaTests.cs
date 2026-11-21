@@ -23,7 +23,6 @@ public class RgaTests
         return rga;
     }
 
-    // Parity with src/client/src/rga.ts: fixtures/rga.json is made by src/client/test/make-rga-fixtures.ts.
     [Fact]
     public void ReplaysTypeScriptSessionsIdentically()
     {
@@ -51,7 +50,6 @@ public class RgaTests
             Assert.Equal(Ok, Apply(b, $"""[["i","x",{20 + j},"{(j == 0 ? "a" : "x")}",{(j == 0 ? 5 : 19 + j)},"{"PASTED"[j]}"]]"""));
         Assert.Equal("helloPASTED world", a.Text());
         Assert.Equal(a.Encode(), b.Encode());
-        // A partial resend integrates only the missing characters.
         Assert.Equal(Ok, Apply(a, """[["i","x",20,"a",5,"PASTEDMORE"]]"""));
         Assert.Equal("helloPASTEDMORE world", a.Text());
     }
@@ -92,13 +90,13 @@ public class RgaTests
     }
 
     [Theory]
-    [InlineData("""[["i","b",5,"zz",1,"x"]]""")] // unknown origin
-    [InlineData("""[["i","b",5,"a",9,"x"]]""")] // origin clock past the end
-    [InlineData("""[["i","",5,"a",1,"x"]]""")] // empty client
-    [InlineData("""[["i","123456789012345678901234567890123",5,"a",1,"x"]]""")] // client over 32 characters
-    [InlineData("""[["i","b",0,"a",1,"x"]]""")] // clock 0
+    [InlineData("""[["i","b",5,"zz",1,"x"]]""")]
+    [InlineData("""[["i","b",5,"a",9,"x"]]""")]
+    [InlineData("""[["i","",5,"a",1,"x"]]""")]
+    [InlineData("""[["i","123456789012345678901234567890123",5,"a",1,"x"]]""")]
+    [InlineData("""[["i","b",0,"a",1,"x"]]""")]
     [InlineData("""[["i","b",-3,"a",1,"x"]]""")]
-    [InlineData("""[["d","a",1,0]]""")] // empty delete
+    [InlineData("""[["d","a",1,0]]""")]
     [InlineData("""[["d","a",0,1]]""")]
     public void RejectsInvalidOps(string ops)
     {
@@ -107,7 +105,6 @@ public class RgaTests
         Assert.Equal("abc", rga.Text());
     }
 
-    // B4: one op with a clock beyond 2^53 would poison every JavaScript client's Lamport clock.
     [Fact]
     public void ClocksStayExactInJavaScript()
     {
@@ -126,7 +123,6 @@ public class RgaTests
         var rga = With("abc");
         Assert.Equal(Invalid, Apply(rga, """[["i","b",5,"a",3,"x"],["d","a",1,1],["i","b",9,"nope",1,"y"]]"""));
         Assert.Equal("abc", rga.Text());
-        // Ops may build on earlier ops of the same batch.
         Assert.Equal(Ok, Apply(rga, """[["i","b",5,"a",3,"x"],["i","b",6,"b",5,"y"],["d","b",5,1]]"""));
         Assert.Equal("abcy", rga.Text());
     }
@@ -138,14 +134,11 @@ public class RgaTests
         Assert.Equal(TooLarge, Apply(rga, """[["i","b",9,"a",5,"xyz"]]""", maxLength: 7));
         Assert.Equal(TooLarge, Apply(rga, """[["i","b",9,"a",5,"xyz"]]""", maxItems: 7));
         Assert.Equal("abcde", rga.Text());
-        // Deleting is always allowed, even when the document is over the limit.
         Assert.Equal(Ok, Apply(rga, """[["d","a",1,2]]""", maxLength: 3));
         Assert.Equal("cde", rga.Text());
-        // Resending characters that are already there doesn't count as growth.
         Assert.Equal(Ok, Apply(rga, """[["i","a",1,"",0,"abcde"]]""", maxLength: 3, maxItems: 5));
     }
 
-    // B5: deleting what isn't there (e.g. a tombstone dropped by compaction) is a no-op.
     [Fact]
     public void DeleteOfUnknownIdIsNoOp()
     {
@@ -165,7 +158,6 @@ public class RgaTests
         Assert.Equal(3, rga.Items);
         Assert.Equal("aef", rga.Text());
         Assert.Equal("""[["a",1,"a",0],["a",5,"ef",0]]""", rga.Encode());
-        // Inserting after a kept character still works; after a dropped tombstone it doesn't.
         Assert.Equal(Ok, Apply(rga, """[["i","b",10,"a",5,"X"]]"""));
         Assert.Equal(Invalid, Apply(rga, """[["i","b",11,"a",3,"Y"]]"""));
         Assert.Equal(Ok, Apply(rga, """[["d","a",3,1]]"""));
@@ -176,7 +168,6 @@ public class RgaTests
     public void ConcurrentInsertsOrderByDescendingId()
     {
         var rga = With("ab");
-        // Both go after "a"; the higher id comes first, ties broken by ordinal client comparison ("B" < "b").
         Assert.Equal(Ok, Apply(rga, """[["i","b",5,"a",1,"1"],["i","B",5,"a",1,"2"],["i","c",6,"a",1,"3"]]"""));
         Assert.Equal("a312b", rga.Text());
     }

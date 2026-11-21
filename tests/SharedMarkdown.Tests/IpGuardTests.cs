@@ -12,7 +12,6 @@ public class IpGuardTests
         var minute = TimeSpan.FromMinutes(1);
         for (int i = 0; i < 3; i++) Assert.True(guard.TryTake("join", "1.2.3.4", 3, minute));
         Assert.False(guard.TryTake("join", "1.2.3.4", 3, minute));
-        // Other buckets and other IPs have their own counters.
         Assert.True(guard.TryTake("submit", "1.2.3.4", 3, minute));
         Assert.True(guard.TryTake("join", "5.6.7.8", 3, minute));
         Assert.Equal(3, guard.Used("join", "1.2.3.4"));
@@ -20,7 +19,7 @@ public class IpGuardTests
         now += 59_999;
         Assert.False(guard.TryTake("join", "1.2.3.4", 3, minute));
         now += 1;
-        Assert.True(guard.TryTake("join", "1.2.3.4", 3, minute)); // a new window
+        Assert.True(guard.TryTake("join", "1.2.3.4", 3, minute));
         Assert.Equal(1, guard.Used("join", "1.2.3.4"));
     }
 

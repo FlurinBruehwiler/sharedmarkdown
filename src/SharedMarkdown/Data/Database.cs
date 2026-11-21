@@ -5,13 +5,10 @@ namespace SharedMarkdown;
 
 public static class Database
 {
-    /// Applies migrations (setting aside databases from before migrations existed) and brings stored
-    /// titles up to the current MarkdownTitle rules. Call once at startup, before serving requests.
     public static async Task Prepare(IServiceProvider services)
     {
         var paths = services.GetRequiredService<Paths>();
         var log = services.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(Database));
-        // Databases from before migrations existed can't be upgraded; set them aside rather than fail.
         if (File.Exists(paths.Database))
         {
             bool legacy;
@@ -40,7 +37,6 @@ public static class Database
         log.LogInformation("Using database {File}", paths.Database);
     }
 
-    /// Titles are stored (search and /api/titles use them); recompute them all when the rules changed.
     static async Task UpdateTitles(AppDb db, ILogger log)
     {
         const string key = "titleVersion";
@@ -48,7 +44,6 @@ public static class Database
         var row = await db.Settings.FindAsync(key);
         if (row?.Value == version) return;
         var n = 0;
-        // The title is in the first lines; 4000 characters is plenty.
         foreach (var chunk in (await db.Documents.Select(d => d.Id).ToListAsync()).Chunk(500))
             foreach (var d in await db.Documents.Where(d => chunk.Contains(d.Id)).Select(d => new { d.Id, d.Title, Head = d.Content.Substring(0, 4000) }).ToListAsync())
             {

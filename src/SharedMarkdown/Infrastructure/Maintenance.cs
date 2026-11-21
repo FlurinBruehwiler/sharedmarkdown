@@ -11,14 +11,11 @@ public record Paths(string DataDir)
     public string ConnectionString => $"Data Source={Database}";
 }
 
-/// Daily: database backup (newest N daily ones kept) and removal of images no document links to anymore.
-/// Labelled backups (made from the admin) are kept apart: they don't count as the daily one or toward the N.
 public partial class Maintenance(Paths paths, DocStore store, IServiceScopeFactory scopes, IConfiguration config, ILogger<Maintenance> log) : BackgroundService
 {
     public sealed record BackupFile(string Name, string Path, DateTime CreatedUtc, long Size);
 
     int KeepBackups => config.GetValue("Backups:Keep", 14);
-    /// Unreferenced images are kept this long, so an accidental delete can still be undone.
     static readonly TimeSpan OrphanGrace = TimeSpan.FromDays(7);
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -43,13 +40,11 @@ public partial class Maintenance(Paths paths, DocStore store, IServiceScopeFacto
 
     DateTime? NewestDailyBackup() => ListBackups().FirstOrDefault(b => IsDaily(b.Name))?.CreatedUtc;
 
-    /// Daily backups are named sharedmarkdown-yyyyMMdd-HHmmss.db; labelled ones have -label before .db.
     [GeneratedRegex(@"^sharedmarkdown-\d{8}-\d{6}\.db$")]
     private static partial Regex DailyName();
 
     public static bool IsDaily(string name) => DailyName().IsMatch(name);
 
-    /// Backs up the database; without a label it's a daily backup (rotated), with one it's kept until deleted by hand.
     public async Task<string> CreateBackup(string? label = null)
     {
         if (label is not null && !Regex.IsMatch(label, "^[a-z0-9]+$")) throw new ArgumentException("Labels are lowercase letters and digits.", nameof(label));
@@ -70,7 +65,7 @@ public partial class Maintenance(Paths paths, DocStore store, IServiceScopeFacto
         return name;
     }
 
-    /// Newest first. Only files actually in the backup folder, so a name from a URL can't point elsewhere.
+    // Only files actually in the backup folder, so a name from a URL can't point elsewhere.
     public List<BackupFile> ListBackups() =>
         !Directory.Exists(paths.Backups) ? [] :
         Directory.GetFiles(paths.Backups, "*.db")

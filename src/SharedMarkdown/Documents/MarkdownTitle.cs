@@ -2,12 +2,9 @@ using System.Text.RegularExpressions;
 
 namespace SharedMarkdown;
 
-/// A document's title: its first line with text, without markdown syntax (images dropped, links reduced
-/// to their text), at most 80 characters. Mirrors titleOf in client/src/main.ts; shared test cases are in
-/// tests/SharedMarkdown.Tests/fixtures/titles.json.
 public static partial class MarkdownTitle
 {
-    /// Bump when the rules change: stored titles are then recomputed at startup (see Database.Prepare).
+    // Must match titleOf in src/client/src/main.ts. Bump Version when the rules change: stored titles are recomputed at startup.
     public const int Version = 1;
 
     [GeneratedRegex(@"!\[[^\]]*\]\([^)]*\)")] private static partial Regex Image();

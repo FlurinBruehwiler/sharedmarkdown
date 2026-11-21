@@ -5,7 +5,6 @@ namespace SharedMarkdown;
 
 public static class BlobEndpoints
 {
-    /// Image upload (POST /api/blobs, body = the image) and download (/b/{id}).
     public static void MapBlobs(this IEndpointRouteBuilder app)
     {
         app.MapPost("/api/blobs", async (HttpContext ctx, ImageService images, IpGuard guard, LimitsService limits) =>
@@ -15,7 +14,6 @@ public static class BlobEndpoints
             var mb = $"{l.MaxUploadBytes / 1024.0 / 1024:0.#} MB";
             if (guard.IsBlocked(ip)) return Results.Text("Uploads are blocked.", statusCode: 403);
             if (ctx.Request.ContentLength > l.MaxUploadBytes) return Results.Text($"Images can be at most {mb}.", statusCode: 413);
-            // Kestrel's default limit (~28.6 MB) applies everywhere else; uploads get exactly the configured one.
             if (ctx.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } body) body.MaxRequestBodySize = l.MaxUploadBytes;
             if (!guard.TryTake("upload", ip, l.UploadsPerIpPerHour, TimeSpan.FromHours(1)))
                 return Results.Text("Too many uploads, please try again later.", statusCode: 429);

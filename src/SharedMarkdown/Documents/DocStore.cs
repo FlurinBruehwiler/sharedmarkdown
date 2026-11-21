@@ -4,25 +4,18 @@ using Microsoft.EntityFrameworkCore;
 
 namespace SharedMarkdown;
 
-/// Keeps live documents in memory; the SQLite copy is written behind by Flush (DocFlusher calls it every 2 s).
 public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILogger<DocStore> log)
 {
     readonly ConcurrentDictionary<string, DocState> _docs = new();
-    /// Read id -> edit id, for the documents in _docs that have one.
     readonly ConcurrentDictionary<string, string> _readIds = new();
-    /// Loads in progress, so concurrent joiners of one document share a load without blocking other documents.
     readonly ConcurrentDictionary<string, Lazy<Task<DocState>>> _loading = new();
-    /// Ids (edit and read) of documents deleted by the admin; they stay unusable.
     readonly ConcurrentDictionary<string, byte> _deletedIds = new(), _deletedReadIds = new();
-    /// Orders "add to _docs" in Load against "mark deleted and remove" in Delete.
+    // Orders "add to _docs" in Load against "mark deleted and remove" in Delete.
     readonly Lock _gate = new();
-    /// One flush (or delete) at a time: concurrent ones could persist an older state last, or re-insert a deleted document.
+    // Concurrent flushes could persist an older state last; a flush racing Delete could re-insert the document.
     readonly SemaphoreSlim _flushLock = new(1, 1);
 
-    /// Documents untouched and unviewed for this long are dropped from memory (after being saved).
     internal TimeSpan EvictAfter { get; set; } = TimeSpan.FromMinutes(5);
-    /// Documents with many tombstones are compacted on load once they haven't been edited for this long,
-    /// so clients that were offline in the meantime can still apply their unsent edits.
     internal TimeSpan CompactAfter { get; set; } = TimeSpan.FromDays(7);
 
     public int LiveCount => _docs.Count;
@@ -30,7 +23,6 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
     public bool IsDeleted(string id) => _deletedIds.ContainsKey(id);
     public bool IsDeletedReadId(string readId) => _deletedReadIds.ContainsKey(readId);
 
-    /// Loads the deleted ids; call once at startup.
     public async Task LoadDeleted()
     {
         using var scope = scopes.CreateScope();
@@ -42,8 +34,6 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
         }
     }
 
-    /// The document, loaded if needed. The result can be Deleted (don't use it) or, by the time its lock is
-    /// taken, Evicted (call Get again).
     public async Task<DocState> Get(string id)
     {
         if (_docs.TryGetValue(id, out var s)) { s.Touch(); return s; }
@@ -69,14 +59,11 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
                 s.ReadId = row.ReadId;
                 s.Title = row.Title;
                 s.UpdatedAt = row.UpdatedAt;
-                // Nobody has it open (it wasn't in memory), so this is a safe moment to drop tombstones. Visible
-                // characters keep their ids; only edits from clients offline since before the compaction that
-                // insert next to a dropped tombstone fail (the client then falls back to a text merge), hence the wait.
+                // Safe while nobody has it open; the wait lets offline clients come back before their origins could be dropped.
                 if (s.Doc.Tombstones > Math.Max(1000, s.Doc.Length) && DateTime.UtcNow - row.UpdatedAt > CompactAfter)
                 {
                     log.LogInformation("Compacting {Doc}: {Items} items, {Length} visible", id, s.Doc.Items, s.Doc.Length);
                     s.Doc.Compact();
-                    // Not marked dirty: it's saved with the next edit, and compacting again on the next load gives the same result.
                 }
             }
         }
@@ -90,7 +77,6 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
         return s;
     }
 
-    /// The edit id of the document with this read id, or null if there is none.
     public async Task<string?> ResolveReadId(string readId)
     {
         if (_readIds.TryGetValue(readId, out var id)) return id;
@@ -99,8 +85,6 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
         return await db.Documents.Where(d => d.ReadId == readId).Select(d => d.Id).FirstOrDefaultAsync();
     }
 
-    /// The document's read id, made up on first use. Saved with the next flush (a new, empty document
-    /// gets its row then too, so the link keeps working). Call with s.Lock held.
     public string EnsureReadId(DocState s)
     {
         if (s.ReadId != null) return s.ReadId;
@@ -110,8 +94,6 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
         return s.ReadId;
     }
 
-    /// Saves changed documents; with `evict`, drops idle ones from memory. A document that fails to save
-    /// stays dirty (retried next time) and doesn't stop the others.
     public async Task Flush(bool evict)
     {
         await _flushLock.WaitAsync();
@@ -136,7 +118,6 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
         finally { _flushLock.Release(); }
     }
 
-    /// Writes the document if it changed. Call with _flushLock held.
     async Task<bool> Save(AppDb db, DocState s)
     {
         string content, state, creatorIp;
@@ -167,8 +148,7 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
         return true;
     }
 
-    /// Drops an idle, saved document from memory. Under its lock, so a concurrent joiner either gets in first
-    /// (Viewers > 0, not evicted) or sees Evicted and loads it again.
+    // Under the lock, so a racing joiner either gets in first (Viewers > 0) or sees Evicted and loads again.
     void TryEvict(DocState s)
     {
         if (!s.Lock.Wait(0)) return;
@@ -182,8 +162,6 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
         finally { s.Lock.Release(); }
     }
 
-    /// Deletes documents (admin action) for good: their ids can't be used again. Anyone viewing them is told
-    /// and stops syncing.
     public async Task Delete(IReadOnlyCollection<string> ids)
     {
         await _flushLock.WaitAsync();
@@ -240,8 +218,6 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
         log.LogInformation("Deleted {Count} documents", ids.Count);
     }
 
-    /// Titles by edit id, plus titles of read-only links keyed "r/{readId}" (never revealing the edit id).
-    /// Uses the stored titles (live documents: as of their last flush), like the admin's document list.
     public async Task<Dictionary<string, string>> Titles(IEnumerable<string> ids, IEnumerable<string>? readIds = null)
     {
         var result = new Dictionary<string, string>();

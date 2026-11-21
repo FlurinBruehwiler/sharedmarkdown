@@ -12,11 +12,9 @@ public record ServerSnapshot(
     long AppMemory, long GcHeap, int Threads, TimeSpan AppUptime, TimeSpan? SystemUptime,
     string Host, string Os);
 
-/// Samples CPU, memory and load every 10 s from /proc (Linux) and keeps the last hour for the
-/// admin Server page. On other systems only the process and disk numbers are available.
 public class ServerMetrics(Paths paths) : BackgroundService
 {
-    const int Keep = 360; // one hour at 10 s
+    const int Keep = 360;
     readonly LinkedList<MetricSample> _history = new();
     readonly Lock _lock = new();
     (ulong Busy, ulong Total)? _lastCpu;
@@ -79,7 +77,6 @@ public class ServerMetrics(Paths paths) : BackgroundService
         }
     }
 
-    /// Busy and total jiffies over all cores from the first line of /proc/stat.
     static (ulong Busy, ulong Total)? ReadCpu()
     {
         if (!File.Exists("/proc/stat")) return null;
@@ -90,7 +87,6 @@ public class ServerMetrics(Paths paths) : BackgroundService
         return (total - idle, total);
     }
 
-    /// Values from /proc/meminfo in bytes.
     static Dictionary<string, long> ReadMeminfo()
     {
         var result = new Dictionary<string, long>();

@@ -14,7 +14,6 @@ public class MarkdownTitleTests
         return data;
     }
 
-    // Shared with the client's titleOf (src/client/src/main.ts).
     [Theory]
     [MemberData(nameof(Cases))]
     public void MatchesSharedFixture(string markdown, string title) => Assert.Equal(title, MarkdownTitle.Of(markdown));

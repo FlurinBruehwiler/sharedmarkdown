@@ -5,7 +5,6 @@ namespace SharedMarkdown.Admin;
 
 public static class AdminEndpoints
 {
-    /// The admin's non-Blazor endpoints (the pages themselves are Razor components).
     public static void MapAdmin(this IEndpointRouteBuilder app)
     {
         app.MapGet("/admin/backups/{name}", (string name, Maintenance maintenance) =>

@@ -4,7 +4,6 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace SharedMarkdown.Tests;
 
-/// A DocStore over a fresh SQLite file; a second instance over the same file plays "after a restart".
 sealed class StoreHost : IAsyncDisposable
 {
     readonly string _dir = Directory.CreateTempSubdirectory("sm-test-").FullName;
@@ -39,7 +38,6 @@ public class DocStoreTests
 {
     static JsonElement Ops(object ops) => JsonSerializer.SerializeToElement(ops);
 
-    /// What DocHub.JoinDoc + Submit do: get the state, retry if it was evicted meanwhile, apply under the lock.
     static async Task Edit(DocStore store, string id, Func<DocState, object> ops)
     {
         while (true)
@@ -58,7 +56,6 @@ public class DocStoreTests
         }
     }
 
-    /// Appends one character from client `client` (its clocks count up from 1).
     static Task Append(DocStore store, string id, string client, int clock, char ch) => Edit(store, id, s =>
     {
         var state = JsonSerializer.Deserialize<JsonElement[][]>(s.Doc.Encode())!;
@@ -74,7 +71,6 @@ public class DocStoreTests
         return await db.Documents.Where(d => d.Id == id).Select(d => d.Content).FirstOrDefaultAsync();
     }
 
-    // B1: concurrent flushes (DocFlusher, backups, the admin) must not persist an older state last.
     [Fact]
     public async Task ConcurrentFlushesKeepTheLatestState()
     {
@@ -91,7 +87,6 @@ public class DocStoreTests
         Assert.Equal(300, (await StoredContent(sp2, id))!.Length);
     }
 
-    // B2: a joiner racing eviction must never edit a copy that is no longer the live one.
     [Fact]
     public async Task EvictionNeverLosesEdits()
     {
@@ -118,7 +113,6 @@ public class DocStoreTests
         Assert.All(states, s => Assert.Same(states[0], s));
     }
 
-    // B1: one document failing to save doesn't stop the others, and is retried.
     [Fact]
     public async Task FailedSaveStaysDirty()
     {
@@ -137,7 +131,6 @@ public class DocStoreTests
         Assert.Equal("a", await StoredContent(sp, "brokenbroken"));
     }
 
-    // B1 + B6: a flush racing a delete must not re-insert the document, and the id stays deleted.
     [Fact]
     public async Task DeleteWinsOverFlushAndStaysDeleted()
     {
@@ -150,7 +143,7 @@ public class DocStoreTests
         await s.Lock.WaitAsync();
         try { readId = store.EnsureReadId(s); } finally { s.Lock.Release(); }
         await store.Flush(evict: false);
-        await Append(store, id, "c", 2, 'b'); // dirty again
+        await Append(store, id, "c", 2, 'b');
 
         var flushes = Task.Run(async () => { for (int i = 0; i < 20; i++) await store.Flush(evict: false); });
         await store.Delete([id]);
@@ -169,7 +162,6 @@ public class DocStoreTests
         Assert.True((await store2.Get(id)).Deleted);
     }
 
-    // B3: titles come from the stored title, never from the live replica.
     [Fact]
     public async Task TitlesUseStoredTitles()
     {
@@ -177,7 +169,7 @@ public class DocStoreTests
         var (store, _) = await host.Start();
         const string id = "titletitle12";
         await Edit(store, id, _ => new object[] { new object[] { "i", "c", 1, "", 0, "# My title\n\nbody" } });
-        Assert.Equal("", (await store.Titles([id]))[id]); // not flushed yet
+        Assert.Equal("", (await store.Titles([id]))[id]);
         await store.Flush(evict: false);
         Assert.Equal("My title", (await store.Titles([id]))[id]);
         var s = await store.Get(id);
@@ -185,13 +177,12 @@ public class DocStoreTests
         await s.Lock.WaitAsync();
         try { readId = store.EnsureReadId(s); } finally { s.Lock.Release(); }
         await store.Flush(evict: false);
-        var (store2, _) = await host.Start(); // not in memory: from the database
+        var (store2, _) = await host.Start();
         var titles = await store2.Titles([id, "missingmissing"], [readId]);
         Assert.Equal("My title", titles[id]);
         Assert.Equal("My title", titles["r/" + readId]);
         Assert.False(titles.ContainsKey("missingmissing"));
 
-        // Lookups while the document is being edited don't touch the replica (they used to throw).
         var stop = false;
         var lookups = Task.Run(async () => { while (!Volatile.Read(ref stop)) await store.Titles([id]); });
         for (int i = 0; i < 300; i++) await Edit(store, id, _ => new object[] { new object[] { "i", "d", 100 + i, "", 0, "x" } });
@@ -199,7 +190,6 @@ public class DocStoreTests
         await lookups;
     }
 
-    // B5: compaction keeps visible ids, and only happens to documents left alone for a while.
     [Fact]
     public async Task CompactsOnlyOldDocuments()
     {
@@ -218,7 +208,6 @@ public class DocStoreTests
         var old = await store2.Get("oldoldoldold");
         Assert.Equal(0, old.Doc.Tombstones);
         Assert.Equal("""[["c",3001,"keep",0]]""", old.Doc.Encode());
-        // An offline client's edits next to visible characters still apply; deletes of dropped tombstones are no-ops.
         Assert.Equal(Rga.ApplyResult.Ok, old.Doc.Apply(Ops(new object[] { new object[] { "i", "z", 5000, "c", 3004, "!" }, new object[] { "d", "c", 5, 2 } }), 50_000, 500_000));
         Assert.Equal("keep!", old.Doc.Text());
 

@@ -3,27 +3,20 @@ using Microsoft.EntityFrameworkCore;
 
 namespace SharedMarkdown;
 
-/// Abuse limits. Defaults come from the "Limits" config section; the admin dashboard can override them at runtime.
 public class Limits
 {
     public int DocumentsPerIpPerHour { get; set; } = 100;
-    /// Maximum visible document length in characters (UTF-16 units, ~bytes for plain text).
     public int MaxDocumentChars { get; set; } = 50_000;
-    /// Cap on stored CRDT items including deleted ones, so endless type/delete can't grow a document forever.
     public int MaxDocumentItems { get; set; } = 500_000;
     public int UploadsPerIpPerHour { get; set; } = 100;
     public int MaxUploadBytes { get; set; } = 10 * 1024 * 1024;
-    /// Larger images are scaled down to fit this many pixels on their longest side.
     public int MaxImageDimension { get; set; } = 2000;
     public int MaxConnectionsPerIp { get; set; } = 30;
-    /// Opening documents (each one is loaded into memory).
     public int JoinsPerIpPerMinute { get; set; } = 120;
-    /// Edit batches; the client sends at most a few per second while typing.
     public int SubmitsPerIpPerMinute { get; set; } = 1200;
     public int TitleLookupsPerIpPerMinute { get; set; } = 120;
     public int AdminLoginAttemptsPerIpPerHour { get; set; } = 10;
 
-    /// Why these limits can't be used, or null if they're fine.
     public string? Validate()
     {
         int[] all = [DocumentsPerIpPerHour, MaxDocumentChars, MaxDocumentItems, UploadsPerIpPerHour, MaxUploadBytes, MaxImageDimension,

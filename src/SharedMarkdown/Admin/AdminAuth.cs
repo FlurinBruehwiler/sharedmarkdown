@@ -5,7 +5,6 @@ namespace SharedMarkdown.Admin;
 
 public static class AdminAuth
 {
-    /// Constant-time password check for the admin login. Empty configured password = admin disabled.
     public static bool CheckPassword(IConfiguration config, string? attempt)
     {
         var expected = config["Admin:Password"];
