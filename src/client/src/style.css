@@ -29,7 +29,7 @@ button.icon { padding: 6px; display: grid; place-items: center; }
 
 #side {
   /* Pinned to the viewport while the document scrolls; scrolls on its own if the list is long. */
-  width: 250px; flex: none; height: 100vh; position: sticky; top: 0; align-self: flex-start; overflow-y: auto;
+  width: 250px; flex: none; height: 100vh; height: 100dvh; position: sticky; top: 0; align-self: flex-start; overflow-y: auto;
   background: var(--panel); border-right: 1px solid var(--line); padding: 14px 10px;
   display: flex; flex-direction: column; gap: 4px;
 }
@@ -48,7 +48,8 @@ button.icon { padding: 6px; display: grid; place-items: center; }
 #list .item:hover .x, #list .x:focus-visible { opacity: 1; }
 /* No hover on touch screens: keep the button visible. */
 @media (hover: none) { #list .x { opacity: .7; } }
-.hint { margin-top: auto; font-size: 12px; color: var(--muted); padding: 8px; }
+#source { margin-top: auto; align-self: flex-start; display: grid; place-items: center; padding: 6px; border-radius: 6px; color: var(--muted); opacity: .6; }
+#source:hover, #source:focus-visible { opacity: 1; color: var(--text); background: var(--hover); }
 
 /* The whole document area takes text clicks (see main.ts), so it shows the text cursor; the header doesn't. */
 main { flex: 1; min-width: 0; cursor: text; }
