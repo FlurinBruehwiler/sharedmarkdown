@@ -47,7 +47,7 @@ const editor = createEditor({
 })
 const view = editor.view
 // Automated tests (?debug) drive the editor through this, even in a background tab.
-if (new URLSearchParams(location.search).has('debug')) Object.assign(window, { cmView: view })
+if (new URLSearchParams(location.search).has('debug')) Object.assign(window, { cmView: view, smHub: hub, smSync: sync })
 
 function textChanged() {
   const md = view.state.doc.toString()
