@@ -6,6 +6,7 @@
 <h2>Backups</h2>
 <p class="muted">
     A backup is taken once a day into <code>@Paths.Backups</code>; the newest ones are kept (<code>Backups:Keep</code>, default 14).
+    Backups made here (named <code>…-manual.db</code>) don't replace the daily one and are kept until you delete them from the folder.
     Copy them off the server too: a backup on the same disk doesn't survive the disk.
     To restore, stop the service and replace <code>@Paths.Database</code> with a backup file.
 </p>

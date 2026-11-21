@@ -11,7 +11,8 @@ public record Paths(string DataDir)
     public string ConnectionString => $"Data Source={Database}";
 }
 
-/// Daily: database backup (newest N kept) and removal of images no document links to anymore.
+/// Daily: database backup (newest N daily ones kept) and removal of images no document links to anymore.
+/// Labelled backups (made from the admin) are kept apart: they don't count as the daily one or toward the N.
 public partial class Maintenance(Paths paths, DocStore store, IServiceScopeFactory scopes, IConfiguration config, ILogger<Maintenance> log) : BackgroundService
 {
     public sealed record BackupFile(string Name, string Path, DateTime CreatedUtc, long Size);
@@ -27,7 +28,7 @@ public partial class Maintenance(Paths paths, DocStore store, IServiceScopeFacto
             await Task.Delay(TimeSpan.FromMinutes(1), ct);
             while (true)
             {
-                if (NewestBackup() is not { } last || DateTime.UtcNow - last > TimeSpan.FromHours(23))
+                if (NewestDailyBackup() is not { } last || DateTime.UtcNow - last > TimeSpan.FromHours(23))
                 {
                     try { await CreateBackup(); }
                     catch (Exception e) { log.LogError(e, "Backup failed"); }
@@ -40,10 +41,18 @@ public partial class Maintenance(Paths paths, DocStore store, IServiceScopeFacto
         catch (OperationCanceledException) { }
     }
 
-    DateTime? NewestBackup() => ListBackups().FirstOrDefault()?.CreatedUtc;
+    DateTime? NewestDailyBackup() => ListBackups().FirstOrDefault(b => IsDaily(b.Name))?.CreatedUtc;
 
+    /// Daily backups are named sharedmarkdown-yyyyMMdd-HHmmss.db; labelled ones have -label before .db.
+    [GeneratedRegex(@"^sharedmarkdown-\d{8}-\d{6}\.db$")]
+    private static partial Regex DailyName();
+
+    public static bool IsDaily(string name) => DailyName().IsMatch(name);
+
+    /// Backs up the database; without a label it's a daily backup (rotated), with one it's kept until deleted by hand.
     public async Task<string> CreateBackup(string? label = null)
     {
+        if (label is not null && !Regex.IsMatch(label, "^[a-z0-9]+$")) throw new ArgumentException("Labels are lowercase letters and digits.", nameof(label));
         await store.Flush(evict: false);
         Directory.CreateDirectory(paths.Backups);
         var name = $"sharedmarkdown-{DateTime.UtcNow:yyyyMMdd-HHmmss}{(label is null ? "" : "-" + label)}.db";
@@ -55,7 +64,8 @@ public partial class Maintenance(Paths paths, DocStore store, IServiceScopeFacto
             await destination.OpenAsync();
             source.BackupDatabase(destination);
         }
-        foreach (var old in ListBackups().Skip(KeepBackups)) File.Delete(old.Path);
+        if (label is null)
+            foreach (var old in ListBackups().Where(b => IsDaily(b.Name)).Skip(KeepBackups)) File.Delete(old.Path);
         log.LogInformation("Created backup {Name}", name);
         return name;
     }
