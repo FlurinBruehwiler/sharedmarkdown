@@ -1,5 +1,3 @@
 <Solution>
-  <Folder Name="/src/">
-    <Project Path="src/SharedMarkdown/SharedMarkdown.csproj" />
-  </Folder>
+  <Project Path="SharedMarkdown/SharedMarkdown.csproj" />
 </Solution>
