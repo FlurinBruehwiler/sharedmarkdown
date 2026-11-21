@@ -90,12 +90,15 @@ app.MapHub<DocHub>("/hub", o => o.Transports = Microsoft.AspNetCore.Http.Connect
 
 app.MapGet("/healthz", async (AppDb db) => await db.Database.CanConnectAsync() ? Results.Text("ok") : Results.StatusCode(503));
 
-app.MapGet("/api/titles", async (string ids, HttpContext ctx, DocStore store, IpGuard guard, LimitsService limits) =>
+// `ids` are edit ids; `r` are read-only link ids, whose titles come back keyed "r/{readId}".
+app.MapGet("/api/titles", async (string? ids, string? r, HttpContext ctx, DocStore store, IpGuard guard, LimitsService limits) =>
 {
     var ip = IpGuard.IpOf(ctx);
     if (guard.IsBlocked(ip)) return Results.StatusCode(403);
     if (!guard.TryTake("titles", ip, limits.Current.TitleLookupsPerIpPerMinute, TimeSpan.FromMinutes(1))) return Results.StatusCode(429);
-    return Results.Ok(await store.Titles(ids.Split(',').Where(i => DocHub.IdPattern().IsMatch(i)).Distinct().Take(200)));
+    return Results.Ok(await store.Titles(
+        (ids ?? "").Split(',').Where(i => DocHub.IdPattern().IsMatch(i)).Distinct().Take(200),
+        (r ?? "").Split(',').Where(i => DocHub.ReadIdPattern().IsMatch(i)).Distinct().Take(200)));
 });
 
 // Image decoding is CPU heavy; don't let a burst of uploads take every core.
@@ -163,6 +166,8 @@ app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
 
 app.MapGet("/", assets.ServeIndex);
 app.MapGet("/{id}", (string id, HttpContext ctx) => DocHub.IdPattern().IsMatch(id) ? assets.ServeIndex(ctx) : Results.NotFound().ExecuteAsync(ctx));
+// Read-only links: the same app; it joins with the read id (DocHub.JoinRead), never learning the edit id.
+app.MapGet("/r/{readId}", (string readId, HttpContext ctx) => DocHub.ReadIdPattern().IsMatch(readId) ? assets.ServeIndex(ctx) : Results.NotFound().ExecuteAsync(ctx));
 
 app.Run();
 

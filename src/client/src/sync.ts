@@ -4,7 +4,8 @@ import { Rga, applyAll, compactOps, diff, firstBatch, type Id, type Op, type Tex
 import { FORMAT, LocalDocs, type DocRecord } from './local'
 import type { Hub, JoinResult, SubmitStatus } from './hub'
 
-const remote = Annotation.define<boolean>()
+/** Marks transactions that apply other people's changes (or the server's copy) rather than local edits. */
+export const remote = Annotation.define<boolean>()
 const cursorsChanged = StateEffect.define<null>()
 
 type Timer = ReturnType<typeof setTimeout>
@@ -88,7 +89,7 @@ export class DocSync {
       this.inflight = null
       if (this.id) this.store.drop(this.id).catch(() => {})
       this.onchange?.()
-      this.notice?.('This document was removed by an administrator. Changes here are no longer saved.')
+      this.notice?.('This document was removed by an administrator.' + (this.readOnly ? '' : ' Changes here are no longer saved.'))
     })
     this.notice = null      // (message, ms?) => void, set by the app
     this.clearNotice = null
@@ -131,6 +132,9 @@ export class DocSync {
       }, { decorations: v => v.decorations }),
     ]
   }
+
+  /** Opened through a read-only link: `id` is then "r/{readId}"; nothing is ever submitted. */
+  get readOnly() { return !!this.id?.startsWith('r/') }
 
   /** Switches to document `id`. `reset` gives the editor a fresh state once the old document is detached. */
   async open(id: string, reset: () => void) {
@@ -243,11 +247,15 @@ export class DocSync {
     this.joining = true
     this.buffer = []
     let res: JoinResult
-    try { res = await this.hub.invoke('Join', id) }
+    try { res = this.readOnly ? await this.hub.invoke('JoinRead', id.slice(2)) : await this.hub.invoke('Join', id) }
     catch (e) {
       if (e instanceof Error && /rate/.test(e.message)) { // invoke only rejects with Errors
         this.notice?.('Opening documents too quickly, retrying in a moment…')
         this.retry(() => this.join(), 15000)
+      } else if (e instanceof Error && /not found/.test(e.message) && id === this.id) {
+        // The server answered: this view-only link is gone, so a stored copy would be misleading.
+        this.notice?.("This view-only link doesn't work: the document doesn't exist or was removed.")
+        return
       }
       this.joining = false
       if (id === this.id) this.loadLocal() // meanwhile show this device's copy, if not connected
@@ -326,7 +334,7 @@ export class DocSync {
   }
 
   local(changes: ChangeSet) {
-    if (!this.loaded) return
+    if (!this.loaded || this.readOnly) return
     const list: [from: number, to: number, text: string][] = []
     changes.iterChanges((fromA, toA, _fromB, _toB, text) => list.push([fromA, toA, text.toString()]))
     // Apply back to front so earlier positions stay valid.
@@ -349,7 +357,7 @@ export class DocSync {
   }
 
   async flush() {
-    if (this.inflight || this.joining || this.deleted || !this.outbox.length || !this.hub.connected || !this.id) return
+    if (this.inflight || this.joining || this.deleted || this.readOnly || !this.outbox.length || !this.hub.connected || !this.id) return
     // After a long time offline the outbox can be large: send it in batches the hub accepts.
     const [batch, rest] = firstBatch(compactOps(this.outbox))
     this.inflight = batch
@@ -394,7 +402,7 @@ export class DocSync {
   }
 
   sendCursor() {
-    if (!this.loaded || !this.hub.connected || !this.view) return
+    if (!this.loaded || !this.hub.connected || !this.view || this.readOnly) return
     const id: Id = this.rga.idAt(this.view.state.selection.main.head) || ['', 0]
     const key = id.join(':')
     if (key === this.lastCursor) return

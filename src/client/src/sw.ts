@@ -26,6 +26,8 @@ const CACHE = 'sm-build-' + __BUILD__
 const IMAGES = 'sm-images'
 const SHELL = '/' // every page is the same index.html; kept under this key
 const ID = /^\/[A-Za-z0-9]{8,32}$/
+/** View-only links (/r/{16-char read id}) are the same page. */
+const READ_ID = /^\/r\/[A-Za-z0-9]{16}$/
 const MAX_IMAGES = 200
 
 sw.addEventListener('install', e => e.waitUntil((async () => {
@@ -51,7 +53,7 @@ sw.addEventListener('fetch', e => {
   const url = new URL(req.url)
   if (url.origin !== sw.location.origin) return
   if (req.mode === 'navigate') {
-    if (url.pathname === '/' || ID.test(url.pathname)) e.respondWith(page(req))
+    if (url.pathname === '/' || ID.test(url.pathname) || READ_ID.test(url.pathname)) e.respondWith(page(req))
   } else if (url.pathname.startsWith('/assets/')) e.respondWith(cacheFirst(req, CACHE, 0))
   else if (url.pathname.startsWith('/b/')) e.respondWith(cacheFirst(req, IMAGES, MAX_IMAGES))
 })

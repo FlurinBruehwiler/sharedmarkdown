@@ -73,6 +73,26 @@ body.syncing #status::before { background: var(--accent); }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) #status { color: #fbbf24; background: #f59e0b1f; } }
 :root[data-theme="dark"] body.syncing #status { color: var(--muted); background: var(--hover); }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) body.syncing #status { color: var(--muted); background: var(--hover); } }
+/* Copy link split button: main part copies this page's link, the arrow opens #copy-menu. */
+#share { position: relative; display: flex; border: 1px solid var(--line); border-radius: 7px; }
+#share > button { min-height: 30px; }
+#copy { border-radius: 6px 0 0 6px; }
+#copy-more { border-radius: 0 6px 6px 0; border-left: 1px solid var(--line); padding: 0 8px; display: grid; place-items: center; color: var(--muted); }
+#copy-more:hover, #copy-more[aria-expanded="true"] { color: var(--text); }
+#copy-more[aria-expanded="true"] { background: var(--hover); }
+#copy-menu {
+  position: absolute; right: -1px; top: calc(100% + 6px); z-index: 3; padding: 4px; min-width: 100%;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px #00000024;
+}
+#copy-menu[hidden] { display: none; }
+#copy-menu button { display: block; width: 100%; min-height: 34px; text-align: left; white-space: nowrap; padding: 6px 10px; }
+#copy-menu button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* Read-only page: there's only one link to copy, and a quiet marker that this is view-only. */
+body.readonly #copy-more, body.readonly #copy-menu { display: none; }
+body.readonly #copy { border-radius: 6px; }
+#ro { display: none; font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; white-space: nowrap; }
+body.readonly #ro { display: inline; }
+#list .tag { flex: none; font-size: 11px; color: var(--muted); padding: 0 2px 0 4px; white-space: nowrap; }
 #scrim { display: none; }
 #notice {
   position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 5; max-width: min(560px, calc(100vw - 32px));
@@ -194,5 +214,9 @@ body.syncing #status::before { background: var(--accent); }
   body.nav #side { transform: none; }
   body.nav #scrim { display: block; position: fixed; inset: 0; z-index: 3; background: #0005; }
   #menu { display: grid; }
+  /* Finger-sized tap targets. */
+  #share > button { min-height: 36px; }
+  #copy-more { min-width: 36px; }
+  #copy-menu button { min-height: 44px; }
   #editor { padding: 4px 16px 40vh; }
 }

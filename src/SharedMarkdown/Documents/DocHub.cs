@@ -11,8 +11,14 @@ public partial class DocHub(DocStore store, IpGuard guard, LimitsService limits,
     [GeneratedRegex("^[A-Za-z0-9]{8,32}$")]
     public static partial Regex IdPattern();
 
-    const string DocKey = "doc", IpKey = "ip", CountedKey = "counted";
+    /// Read-only link ids (see DocStore.EnsureReadId).
+    [GeneratedRegex("^[A-Za-z0-9]{16}$")]
+    public static partial Regex ReadIdPattern();
+
+    const string DocKey = "doc", IpKey = "ip", CountedKey = "counted", ReadOnlyKey = "readonly";
     DocState? Current => Context.Items.TryGetValue(DocKey, out var v) ? v as DocState : null;
+    /// Joined through a read-only link: receives everything, may change nothing.
+    bool ReadOnly => Context.Items.ContainsKey(ReadOnlyKey);
     string Ip => (string)Context.Items[IpKey]!;
 
     /// Random per-connection id shown to other clients (the SignalR connection id stays private).
@@ -43,8 +49,44 @@ public partial class DocHub(DocStore store, IpGuard guard, LimitsService limits,
         if (!guard.TryTake("join", Ip, limits.Current.JoinsPerIpPerMinute, TimeSpan.FromMinutes(1)))
             throw new HubException("rate");
         await LeaveCurrent();
+        Context.Items.Remove(ReadOnlyKey);
+        return await JoinDoc(await store.Get(id));
+    }
 
-        var s = await store.Get(id);
+    /// Joins through a read-only link. Same result as Join, which contains nothing that reveals the edit id.
+    public async Task<object> JoinRead(string readId)
+    {
+        if (!ReadIdPattern().IsMatch(readId)) throw new HubException("bad id");
+        if (!guard.TryTake("join", Ip, limits.Current.JoinsPerIpPerMinute, TimeSpan.FromMinutes(1)))
+            throw new HubException("rate");
+        await LeaveCurrent();
+        // Read-only before joining the group, so there's no moment where this connection could edit.
+        Context.Items[ReadOnlyKey] = true;
+        if (await store.ResolveReadId(readId) is not string id) throw new HubException("not found");
+        return await JoinDoc(await store.Get(id));
+    }
+
+    /// The read-only link's id for the joined document, created on first request. Editors only.
+    public async Task<string> ReadLink(string id)
+    {
+        if (ReadOnly || Current is not DocState s || s.Id != id || s.Deleted) throw new HubException("invalid");
+        await s.Lock.WaitAsync();
+        try
+        {
+            // A read link for a document nobody wrote in yet saves it, so it counts as creating one.
+            if (s.IsNew)
+            {
+                if (!guard.TryTake("create", Ip, limits.Current.DocumentsPerIpPerHour, TimeSpan.FromHours(1))) throw new HubException("create");
+                s.CreatorIp = Ip;
+            }
+            return store.EnsureReadId(s);
+        }
+        finally { s.Lock.Release(); }
+    }
+
+    async Task<object> JoinDoc(DocState s)
+    {
+        var id = s.Id;
         int viewers;
         string state;
         await s.Lock.WaitAsync();
@@ -63,9 +105,11 @@ public partial class DocHub(DocStore store, IpGuard guard, LimitsService limits,
         return new { state = JsonDocument.Parse(state).RootElement, maxChars = limits.Current.MaxDocumentChars, maxImageDimension = limits.Current.MaxImageDimension };
     }
 
-    /// Returns "ok", or why the batch was refused: "invalid", "size", "create" (too many new documents) or "rate".
+    /// Returns "ok", or why the batch was refused: "invalid", "size", "create" (too many new documents), "rate"
+    /// or "readonly" (joined through a read-only link; enforced here, not just in the client).
     public async Task<string> Submit(string id, JsonElement ops)
     {
+        if (ReadOnly) return "readonly";
         if (Current is not DocState s || s.Id != id || s.Deleted) return "invalid";
         var l = limits.Current;
         if (!guard.TryTake("submit", Ip, l.SubmitsPerIpPerMinute, TimeSpan.FromMinutes(1))) return "rate";
@@ -90,9 +134,10 @@ public partial class DocHub(DocStore store, IpGuard guard, LimitsService limits,
     }
 
     /// Cursor position as an RGA anchor: the id of the character before it ("" = document start).
+    /// Read-only viewers are counted in presence but their carets aren't shown.
     public async Task Cursor(string client, long clock)
     {
-        if (Current is DocState s && client.Length <= 32)
+        if (Current is DocState s && !ReadOnly && client.Length <= 32)
             await Clients.OthersInGroup(s.Id).SendAsync("cursor", Peer, client, clock);
     }
 
@@ -107,7 +152,7 @@ public partial class DocHub(DocStore store, IpGuard guard, LimitsService limits,
         if (Current is not DocState s) return;
         Context.Items.Remove(DocKey);
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, s.Id);
-        await Clients.Group(s.Id).SendAsync("cursor", Peer, null, 0);
+        if (!ReadOnly) await Clients.Group(s.Id).SendAsync("cursor", Peer, null, 0);
         int viewers;
         await s.Lock.WaitAsync();
         try { viewers = --s.Viewers; s.LastTouched = DateTime.UtcNow; } finally { s.Lock.Release(); }

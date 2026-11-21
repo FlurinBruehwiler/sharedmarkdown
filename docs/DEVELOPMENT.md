@@ -46,7 +46,8 @@ The admin dashboard shows usage, lists documents and images (searchable, filtera
 
 ## Security notes
 
-- The document URL is the only access control (12 random base62 characters, ~71 bits). Pages send `Referrer-Policy: no-referrer` so the URL never leaks to linked sites, and `X-Robots-Tag: noindex`.
+- The document URL is the only access control (12 random base62 characters, ~71 bits).
+- Read-only links (`/r/{readId}`, from the arrow next to "Copy link") use a separate random id (16 base62 characters, made on first request, column `Documents.ReadId`). Connections that join with it (`DocHub.JoinRead`) get live ops, presence and others' cursors, but `Submit` refuses them server-side, their cursors aren't relayed, and nothing sent to them contains the edit id. Links inside a document are still whatever the text says (usually edit links). Pages send `Referrer-Policy: no-referrer` so the URL never leaks to linked sites, and `X-Robots-Tag: noindex`.
 - The editor page has a strict Content-Security-Policy (only the bundled script and the hashed inline theme script run).
 - Admin login is a single password (`Admin:Password`), compared in constant time, rate limited, with an HttpOnly SameSite=Strict cookie. Use a long random password.
 

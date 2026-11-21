@@ -8,7 +8,7 @@ import { livePreview, Highlight, localImages } from './livepreview'
 import { tableEnter, tableArrow, insertTable } from './table'
 import { slashMenu } from './slash'
 import { Hub } from './hub'
-import { DocSync } from './sync'
+import { DocSync, remote } from './sync'
 import { setupOffline } from './offline'
 
 /** An element from index.html, which always has it. */
@@ -18,6 +18,17 @@ function $<T extends Element = HTMLElement>(sel: string): T {
   return el
 }
 const ID = /^\/([A-Za-z0-9]{8,32})$/
+const READ = /^\/r\/([A-Za-z0-9]{16})$/
+
+/**
+ * The document a path opens: its edit id, or "r/{readId}" for a read-only link. Used everywhere a
+ * document is named (current, sidebar, sync), so the two kinds never collide: edit ids have no slash.
+ */
+function docKey(path: string) {
+  const m = path.match(ID) ?? path.match(READ)
+  return m ? m[0].slice(1) : null
+}
+const isReadKey = (key: string) => key.startsWith('r/')
 
 function randomId(n: number) {
   const abc = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
@@ -77,13 +88,15 @@ function renderList() {
     const a = document.createElement('a')
     a.href = '/' + d.id
     a.textContent = d.title || 'Untitled'
+    const tag = document.createElement('span')
+    if (isReadKey(d.id)) { tag.className = 'tag'; tag.textContent = 'View only' }
     const x = document.createElement('button')
     x.className = 'x'
     x.title = 'Remove from list'
     x.setAttribute('aria-label', `Remove ${a.textContent} from list`)
     x.textContent = '×'
     x.onclick = () => removeFromList(d.id)
-    row.append(a, x)
+    row.append(a, tag, x)
     list.append(row)
   }
 }
@@ -100,10 +113,12 @@ function removeFromList(id: string) {
 }
 
 async function refreshTitles() {
-  const ids = docs.filter(d => d.id !== current).map(d => d.id)
-  if (!ids.length) return
+  const keys = docs.filter(d => d.id !== current).map(d => d.id)
+  if (!keys.length) return
+  const ids = keys.filter(k => !isReadKey(k)), reads = keys.filter(isReadKey).map(k => k.slice(2))
   try {
-    const titles: Record<string, string> = await (await fetch('/api/titles?ids=' + ids.join(','))).json()
+    // Read-only entries are looked up by read id and come back keyed "r/{readId}", like their keys here.
+    const titles: Record<string, string> = await (await fetch(`/api/titles?ids=${ids.join(',')}&r=${reads.join(',')}`)).json()
     for (const d of docs) if (titles[d.id]) d.title = titles[d.id]
     store.set('docs', docs)
     renderList()
@@ -112,6 +127,8 @@ async function refreshTitles() {
 
 // Linked documents show up in the sidebar, so sharing one link shares the whole web of documents.
 function discoverLinks(md: string) {
+  // A view-only link shouldn't fill the viewer's list with edit links (they're still in the text, though).
+  if (isReadKey(current)) return
   // Absolute links (inline or <autolink>) to this host, and relative ](/id) links.
   const re = /https?:\/\/([^/\s)>\]]+)\/([A-Za-z0-9]{8,32})(?![\w/])|\]\(\/([A-Za-z0-9]{8,32})\)/g
   let added = false
@@ -137,8 +154,8 @@ let titleTimer: ReturnType<typeof setTimeout> | undefined
 function openLink(href: string) {
   let u: URL
   try { u = new URL(href, location.href) } catch { return }
-  const m = u.origin === location.origin && u.pathname.match(ID)
-  if (m) go(m[1])
+  const key = u.origin === location.origin && docKey(u.pathname)
+  if (key) go(key)
   else if (/^(https?|mailto):$/.test(u.protocol)) window.open(u.href, '_blank', 'noopener')
 }
 
@@ -344,6 +361,7 @@ const fileDrops = ViewPlugin.fromClass(class {
     if (e.type === 'dragleave') return
     // Never let the browser open a file dropped on the page: it would navigate away from the document.
     e.preventDefault()
+    if (this.view.state.readOnly) { e.dataTransfer!.dropEffect = 'none'; return } // view-only link: nothing to add
     const pos = dropPos(this.view, e)
     if (e.type !== 'drop') {
       e.dataTransfer!.dropEffect = pos == null ? 'none' : 'copy'
@@ -357,6 +375,7 @@ const fileDrops = ViewPlugin.fromClass(class {
     if (!images || Array.from(files).some(f => !f.type.startsWith('image/'))) notice('Only images can be added', 3000)
   }
   dropImageLink(e: DragEvent) {
+    if (this.view.state.readOnly) return
     const md = e.dataTransfer && droppedImage(e.dataTransfer)
     const pos = md ? dropPos(this.view, e) : null
     if (!md || pos == null) return
@@ -383,13 +402,13 @@ function pasteLink(view: EditorView, text: string) {
     return
   }
   const insert = (title: string | null | undefined) => view.dispatch(view.state.replaceSelection(title ? `[${title.replace(/[\[\]]/g, '')}](${text})` : text))
-  let m: RegExpMatchArray | null | false = null
-  try { const u = new URL(text); m = u.host === location.host && u.pathname.match(ID) } catch {}
-  if (!m) return insert(null)
-  const id = m[1]
+  let key: string | null | false = null
+  try { const u = new URL(text); key = u.host === location.host && docKey(u.pathname) } catch {}
+  if (!key) return insert(null)
+  const id = key
   const known = docs.find(d => d.id === id)?.title
   if (known) return insert(known)
-  fetch('/api/titles?ids=' + id).then(r => r.json()).then((t: Record<string, string>) => insert(t[id]), () => insert(null))
+  fetch('/api/titles?' + (isReadKey(id) ? 'r=' + id.slice(2) : 'ids=' + id)).then(r => r.json()).then((t: Record<string, string>) => insert(t[id]), () => insert(null))
 }
 
 // GFM markdown plus ==highlight==. Same language data as markdownLanguage, so its commands
@@ -456,9 +475,9 @@ const extensions = [
   ]),
   EditorView.lineWrapping,
   EditorView.contentAttributes.of({ spellcheck: 'false', autocorrect: 'off', autocapitalize: 'off' }),
-  placeholder('Start writing…'),
   EditorView.domEventHandlers({
     paste(e, view) {
+      if (view.state.readOnly) return false
       const data = e.clipboardData
       if (!data) return false
       if (data.files.length && insertImages(view, data.files)) return true
@@ -474,9 +493,28 @@ const extensions = [
   }),
 ]
 
-const view = new EditorView({ parent: $('#editor'), state: EditorState.create({ extensions }) })
+/**
+ * Read-only links. readOnly/editable stop typing, but not edits made by code (task checkboxes, table
+ * tools, menus): drop every change that doesn't come from the server. The server refuses them anyway.
+ */
+const readOnly = [
+  EditorState.readOnly.of(true),
+  EditorView.editable.of(false),
+  EditorState.transactionFilter.of(tr => tr.docChanged && !tr.annotation(remote) ? [] : tr),
+]
+
+/** A fresh editor state for a document; `ro` for one opened through a read-only link. */
+function editorState(ro: boolean) {
+  return EditorState.create({ extensions: [extensions, ro ? [readOnly, placeholder('This document is empty.')] : placeholder('Start writing…')] })
+}
+
+const view = new EditorView({ parent: $('#editor'), state: editorState(false) })
 // For automated tests (?debug): lets a test drive the editor even in a background tab.
 if (new URLSearchParams(location.search).has('debug')) Object.assign(window, { cmView: view })
+// The filter keeps task checkboxes from changing the text, but the browser would still tick the box.
+$('#editor').addEventListener('click', e => {
+  if (view.state.readOnly && e.target instanceof HTMLInputElement && e.target.type === 'checkbox') e.preventDefault()
+}, true)
 
 function onTextChanged() {
   const md = view.state.doc.toString()
@@ -536,7 +574,9 @@ async function open(id: string) {
   await sync.open(id, () => {
     current = id
     // Fresh editor state per document, so undo history doesn't leak between documents.
-    view.setState(EditorState.create({ extensions }))
+    view.setState(editorState(isReadKey(id)))
+    document.body.classList.toggle('readonly', isReadKey(id))
+    setMenu(false, false)
     document.title = 'SharedMarkdown'
     $('#people').textContent = ''
     document.body.classList.remove('nav')
@@ -551,10 +591,7 @@ function go(id: string) {
   view.focus()
 }
 
-window.addEventListener('popstate', () => {
-  const m = location.pathname.match(ID)
-  open(m ? m[1] : randomId(12))
-})
+window.addEventListener('popstate', () => open(docKey(location.pathname) ?? randomId(12)))
 
 $('#list').addEventListener('click', e => {
   const a = e.target instanceof Element ? e.target.closest('a') : null
@@ -565,11 +602,64 @@ $('#list').addEventListener('click', e => {
 $('#new').onclick = () => go(randomId(12))
 $('#menu').onclick = () => document.body.classList.toggle('nav')
 $('#scrim').onclick = () => document.body.classList.remove('nav')
-const copy = $('#copy')
+// Copy link: a split button. The main part copies the link this page was opened with (for a
+// read-only page that's the read-only link: the edit link is never known there); the arrow opens a
+// menu with "Copy read-only link".
+const copy = $('#copy'), more = $('#copy-more'), menu = $('#copy-menu')
 copy.onclick = async () => {
-  await navigator.clipboard.writeText(location.href)
+  await navigator.clipboard.writeText(location.origin + '/' + current)
   copy.textContent = 'Copied'
   setTimeout(() => copy.textContent = 'Copy link', 1200)
+}
+
+/** Read ids of documents opened here, by edit id (the server makes one up on the first request). */
+const readIds = new Map<string, string>()
+async function readLink() {
+  const id = current
+  let r = readIds.get(id)
+  if (!r) readIds.set(id, r = await hub.invoke('ReadLink', id))
+  return location.origin + '/r/' + r
+}
+
+function setMenu(open: boolean, focusButton = true) {
+  if (menu.hidden === !open) return
+  menu.hidden = !open
+  more.setAttribute('aria-expanded', String(open))
+  if (open) menu.querySelector<HTMLElement>('[role=menuitem]')?.focus()
+  else if (focusButton) more.focus()
+}
+more.onclick = () => setMenu(!!menu.hidden)
+more.onkeydown = e => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); setMenu(true) }
+}
+menu.onkeydown = e => {
+  const items = [...menu.querySelectorAll<HTMLElement>('[role=menuitem]')]
+  const i = items.indexOf(document.activeElement as HTMLElement)
+  const to = e.key === 'ArrowDown' ? i + 1 : e.key === 'ArrowUp' ? i - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? -1 : null
+  if (to !== null) { e.preventDefault(); items.at(to % items.length)?.focus() }
+  else if (e.key === 'Escape') { e.preventDefault(); setMenu(false) }
+  else if (e.key === 'Tab') setMenu(false, false)
+}
+document.addEventListener('pointerdown', e => {
+  if (!menu.hidden && !(e.target instanceof Node && $('#share').contains(e.target))) setMenu(false, false)
+})
+$('#copy-ro').onclick = async () => {
+  setMenu(false)
+  const link = readLink()
+  try {
+    // Handing the clipboard a promise keeps the click's permission (Safari) while the server answers.
+    if (typeof ClipboardItem !== 'undefined') await navigator.clipboard.write([new ClipboardItem({ 'text/plain': link.then(l => new Blob([l], { type: 'text/plain' })) })])
+    else await navigator.clipboard.writeText(await link)
+    notice('Read-only link copied. People with it can view, not edit.', 3000)
+  } catch {
+    let l: string
+    try { l = await link } catch (e) {
+      notice(e instanceof Error && /create/.test(e.message) ? "You've created many documents in the last hour; try again later."
+        : "Couldn't get a read-only link. Are you offline?", 5000)
+      return
+    }
+    notice('Read-only link: ' + l, 15000) // clipboard not available: show it for copying by hand
+  }
 }
 $('#theme').onclick = () => {
   const root = document.documentElement
@@ -578,9 +668,9 @@ $('#theme').onclick = () => {
   store.set('theme', root.dataset.theme)
 }
 
-const m = location.pathname.match(ID)
-const first = m ? m[1] : randomId(12)
-if (!m) history.replaceState(null, '', '/' + first)
+const key = docKey(location.pathname)
+const first = key ?? randomId(12)
+if (!key) history.replaceState(null, '', '/' + first)
 open(first)
 refreshTitles()
 view.focus()

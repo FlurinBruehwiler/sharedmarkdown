@@ -26,7 +26,8 @@ export function setupOffline(hub: Hub, sync: DocSync) {
     document.body.classList.toggle('offline', offline)
     document.body.classList.toggle('syncing', syncing)
     const text = offline
-      ? stored ? "Offline — changes are saved on this device and sync when you're back online"
+      ? sync.readOnly ? 'Offline — showing the last version seen on this device'
+      : stored ? "Offline — changes are saved on this device and sync when you're back online"
         : "Offline — keep this tab open; changes sync when you're back online"
       : syncing ? 'Back online, syncing…' : ''
     if (status.textContent !== text) { status.textContent = text; status.title = text }
@@ -64,6 +65,7 @@ export function setupOffline(hub: Hub, sync: DocSync) {
       await new Promise<void>((resolve, reject) => { conn.onopen = resolve; setTimeout(() => reject(new Error('timeout')), 10000) })
       for (const [id, pending] of docs) {
         if (id === sync.id) continue // opened meanwhile: DocSync adopts them
+        if (id.startsWith('r/')) continue // view-only links never have edits to send
         const res = await bg.invoke('Join', id)
         const rga = new Rga(randomClient())
         rga.load(res.state)

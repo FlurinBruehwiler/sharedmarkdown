@@ -12,6 +12,8 @@ public class Document
     public string Title { get; set; } = "";
     /// IP that created the document, for abuse handling.
     public string CreatorIp { get; set; } = "";
+    /// Separate random id for the read-only link (/r/{ReadId}); null until someone asks for one.
+    public string? ReadId { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }
@@ -54,6 +56,7 @@ public class AppDb(DbContextOptions<AppDb> options) : DbContext(options)
         b.Entity<Document>().HasIndex(d => d.CreatedAt);
         b.Entity<Document>().HasIndex(d => d.CreatorIp);
         b.Entity<Document>().HasIndex(d => d.UpdatedAt);
+        b.Entity<Document>().HasIndex(d => d.ReadId).IsUnique();
         b.Entity<Blob>().HasIndex(x => x.CreatedAt);
         b.Entity<Blob>().HasIndex(x => x.UploaderIp);
         b.Entity<BlockedIp>().HasKey(x => x.Ip);
