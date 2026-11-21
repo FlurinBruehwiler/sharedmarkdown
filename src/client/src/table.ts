@@ -2,7 +2,7 @@
 // cell, which shows its own markdown while you're in it. Every edit is a minimal text change on the
 // markdown source (one cell's text, one line, one `| x ` segment per row), never a rewrite of the
 // whole table, so collaborators editing other cells at the same time are never clobbered.
-import { StateEffect, StateField, type ChangeSpec, type EditorState, type Extension, type Line, type Range, type Text } from '@codemirror/state'
+import { StateField, type ChangeSpec, type EditorState, type Extension, type Line, type Range, type Text } from '@codemirror/state'
 import { Decoration, EditorView, WidgetType, type Command, type DecorationSet } from '@codemirror/view'
 import { syntaxTree } from '@codemirror/language'
 import { undo, redo, isolateHistory } from '@codemirror/commands'
@@ -332,8 +332,6 @@ interface TableDOM extends HTMLDivElement {
   from: number
 }
 
-const tableEffect = StateEffect.define<{ from: number, source: boolean }>()
-
 /**
  * Where to put the caret after a structural edit. Kept outside the widget: when an edit changes a
  * table's lines, CodeMirror may replace the widget's element instead of updating it.
@@ -592,14 +590,6 @@ const ops = {
     }
     return changes
   }, null, 'delete.table'),
-  /** Shows the whole table as markdown until the cursor leaves it. */
-  editSource: (wrap: TableDOM) => {
-    const t = source(wrap)
-    if (!t) return
-    const view = wrap.view
-    view.dispatch({ effects: tableEffect.of({ from: t.from, source: true }), selection: { anchor: t.lines[0].from }, scrollIntoView: true })
-    view.focus()
-  },
 }
 
 // ---------- cell selection ----------
@@ -705,7 +695,6 @@ function rowItems(wrap: TableDOM, r: number): MenuItem[] {
     { label: 'Move row up', disabled: r <= 1, run: () => ops.moveRow(wrap, r, -1) },
     { label: 'Move row down', disabled: header || r >= w.rows - 1, run: () => ops.moveRow(wrap, r, 1) },
     { sep: true },
-    { label: 'Edit table as Markdown', run: () => ops.editSource(wrap) },
     { label: header ? 'Delete header row' : 'Delete row', danger: true, disabled: w.rows <= 1, run: () => ops.deleteRows(wrap, [r]) },
   ]
 }
@@ -998,28 +987,12 @@ function onKey(wrap: TableDOM, e: KeyboardEvent) {
 
 // ---------- decorations ----------
 
-/** Tables shown as markdown ("Edit table as Markdown"), by start position. */
-const sourceMode = StateField.define<number[]>({
-  create: () => [],
-  update(list, tr) {
-    let next = tr.docChanged ? list.map(p => tr.changes.mapPos(p)) : list
-    for (const e of tr.effects) if (e.is(tableEffect)) next = e.value.source ? [...next, e.value.from] : next.filter(p => p !== e.value.from)
-    // A table leaves source mode once the cursor is outside it.
-    if (next.length && (tr.selection || tr.docChanged)) {
-      const sel = tr.state.selection.main
-      next = next.filter(p => { const n = tableAt(tr.state, p); return !!n && sel.from <= n.to && sel.to >= n.from })
-    }
-    return next
-  },
-})
-
 function buildTables(state: EditorState): DecorationSet {
   const decos: Range<Decoration>[] = []
-  const raw = state.field(sourceMode)
   for (let n: SyntaxNode | null = syntaxTree(state).topNode.firstChild; n; n = n.nextSibling) {
     if (n.name !== 'Table') continue
     const t = readTable(state, n)
-    if (t.lines.length < 2 || raw.some(p => p >= t.from && p <= t.to)) continue
+    if (t.lines.length < 2) continue
     const rowNodes = [n.getChild('TableHeader'), ...n.getChildren('TableRow')]
     const rows = t.rows.map((row, i) => Array.from({ length: t.cols }, (_, c): CellSpec =>
       row[c] ? { raw: row[c].text, parts: cellParts(state, rowNodes[i], row[c]) } : { raw: '', parts: [] }))
@@ -1032,8 +1005,7 @@ function buildTables(state: EditorState): DecorationSet {
 const tableField = StateField.define<DecorationSet>({
   create: buildTables,
   update(decos, tr) {
-    if (tr.docChanged || tr.effects.some(e => e.is(tableEffect)) || syntaxTree(tr.startState) !== syntaxTree(tr.state)
-      || tr.startState.field(sourceMode) !== tr.state.field(sourceMode)) return buildTables(tr.state)
+    if (tr.docChanged || syntaxTree(tr.startState) !== syntaxTree(tr.state)) return buildTables(tr.state)
     return decos
   },
   provide: f => EditorView.decorations.from(f),
@@ -1095,5 +1067,5 @@ const trackEdits = EditorView.updateListener.of(u => {
 
 export function tables(linkHandler?: LinkHandler): Extension {
   if (linkHandler) openLink = linkHandler
-  return [sourceMode, tableField, trackEdits]
+  return [tableField, trackEdits]
 }
