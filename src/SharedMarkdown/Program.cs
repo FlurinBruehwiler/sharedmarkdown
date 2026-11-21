@@ -19,7 +19,7 @@ builder.Services.AddSingleton(paths);
 builder.Services.AddDbContextFactory<AppDb>(o => o.UseSqlite(paths.ConnectionString));
 builder.Services.AddSingleton<DocStore>();
 builder.Services.AddHostedService<DocFlusher>();
-builder.Services.AddSingleton<Assets>();
+builder.Services.AddSingleton<AppShell>();
 builder.Services.AddSingleton<LimitsService>();
 builder.Services.AddSingleton<IpGuard>();
 builder.Services.AddSingleton<Maintenance>();
@@ -79,8 +79,6 @@ app.Use((ctx, next) =>
     return next(ctx);
 });
 
-var assets = app.Services.GetRequiredService<Assets>();
-app.Use((ctx, next) => assets.TryServe(ctx, out var t) ? t : next(ctx));
 
 app.UseAuthentication();
 app.UseAuthorization();
@@ -162,12 +160,14 @@ app.MapPost("/admin/logout", async (HttpContext ctx) =>
 }).RequireAuthorization();
 
 app.MapStaticAssets();
+var shell = app.Services.GetRequiredService<AppShell>();
+shell.Load(app);
 app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
 
-app.MapGet("/", assets.ServeIndex);
-app.MapGet("/{id}", (string id, HttpContext ctx) => DocHub.IdPattern().IsMatch(id) ? assets.ServeIndex(ctx) : Results.NotFound().ExecuteAsync(ctx));
+app.MapGet("/", shell.Serve);
+app.MapGet("/{id}", (string id, HttpContext ctx) => DocHub.IdPattern().IsMatch(id) ? shell.Serve(ctx) : Results.NotFound().ExecuteAsync(ctx));
 // Read-only links: the same app; it joins with the read id (DocHub.JoinRead), never learning the edit id.
-app.MapGet("/r/{readId}", (string readId, HttpContext ctx) => DocHub.ReadIdPattern().IsMatch(readId) ? assets.ServeIndex(ctx) : Results.NotFound().ExecuteAsync(ctx));
+app.MapGet("/r/{readId}", (string readId, HttpContext ctx) => DocHub.ReadIdPattern().IsMatch(readId) ? shell.Serve(ctx) : Results.NotFound().ExecuteAsync(ctx));
 
 app.Run();
 

@@ -1,46 +1,45 @@
-// Bundles the frontend into ../SharedMarkdown/dist: one hashed (cache-forever) JS file, CSS inlined into index.html,
-// and the service worker (sw.js).
+// Builds the frontend into the server project (../SharedMarkdown):
+// - wwwroot/assets/app.js   the bundle; ASP.NET's MapStaticAssets fingerprints, compresses and caches it
+// - wwwroot/sw.js           the service worker, at the site root (its scope), never fingerprinted
+// - app.html                the page, with the CSS inlined; served by AppShell.cs for every document URL
 import * as esbuild from 'esbuild'
 import { execSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
-import path from 'node:path'
 
 // Type-check first: esbuild only strips types, so a type error would otherwise ship.
 try { execSync('npx tsc -p .', { stdio: 'inherit' }) } catch { process.exit(1) }
 
-// Output goes into the server project, which serves it (see Assets.cs).
-const out = '../SharedMarkdown/dist'
-fs.rmSync(out, { recursive: true, force: true })
+const server = '../SharedMarkdown'
+fs.mkdirSync(server + '/wwwroot/assets', { recursive: true })
 
-const result = await esbuild.build({
+const app = server + '/wwwroot/assets/app.js'
+await esbuild.build({
   entryPoints: ['src/main.ts'],
   bundle: true,
   minify: true,
   format: 'esm',
   target: 'es2022',
-  outdir: out + '/assets',
-  entryNames: '[name]-[hash]',
+  outfile: app,
   legalComments: 'none',
-  metafile: true,
 })
-const js = Object.keys(result.metafile.outputs).find(f => f.endsWith('.js'))
+
 const css = (await esbuild.transform(fs.readFileSync('src/style.css', 'utf8'), { loader: 'css', minify: true })).code.trim()
 const html = fs.readFileSync('index.html', 'utf8')
   .replace(/>\s+</g, '><')
   .replace('/*CSS*/', () => css)
-  .replace('/*JS*/', '/assets/' + path.basename(js))
-fs.writeFileSync(out + '/index.html', html)
+fs.writeFileSync(server + '/app.html', html)
 
-// The service worker: its own entry, at the site root (its scope) and not hashed, so browsers find
-// new versions at the same URL. The bundle name is baked in: each deploy changes sw.js and replaces the cache.
+// The service worker names its cache after this build, so every deploy changes sw.js and replaces the cache.
+const build = createHash('sha256').update(fs.readFileSync(app)).update(html).digest('hex').slice(0, 12)
 await esbuild.build({
   entryPoints: ['src/sw.ts'],
   bundle: true,
   minify: true,
   format: 'iife', // registered as a classic worker script
   target: 'es2022',
-  outfile: out + '/sw.js',
+  outfile: server + '/wwwroot/sw.js',
   legalComments: 'none',
-  define: { __BUILD__: JSON.stringify('/assets/' + path.basename(js)) },
+  define: { __BUILD__: JSON.stringify(build) },
 })
-console.log(`js ${(fs.statSync(js).size / 1024).toFixed(1)} KiB, html ${(html.length / 1024).toFixed(1)} KiB`)
+console.log(`js ${(fs.statSync(app).size / 1024).toFixed(1)} KiB, html ${(html.length / 1024).toFixed(1)} KiB`)

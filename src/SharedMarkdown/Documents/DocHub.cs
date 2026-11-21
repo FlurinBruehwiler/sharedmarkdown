@@ -6,7 +6,7 @@ namespace SharedMarkdown;
 
 /// Relays RGA operations between clients editing the same document and keeps the server replica
 /// (which is what gets persisted and handed to new joiners). Merging is entirely the CRDT's job.
-public partial class DocHub(DocStore store, IpGuard guard, LimitsService limits, Assets assets, ILogger<DocHub> log) : Hub
+public partial class DocHub(DocStore store, IpGuard guard, LimitsService limits, AppShell shell, ILogger<DocHub> log) : Hub
 {
     [GeneratedRegex("^[A-Za-z0-9]{8,32}$")]
     public static partial Regex IdPattern();
@@ -41,7 +41,7 @@ public partial class DocHub(DocStore store, IpGuard guard, LimitsService limits,
     /// The current client build. Clients call this first after every (re)connect and reload when it
     /// differs from theirs, so tabs left open across a deploy never talk an outdated protocol.
     /// Keep this method's signature stable forever.
-    public string Version() => assets.Build;
+    public string Version() => shell.Build;
 
     public async Task<object> Join(string id)
     {

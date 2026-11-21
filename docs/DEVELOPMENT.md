@@ -9,7 +9,7 @@ Paste a document's link into another document to connect them; linked documents 
 dotnet run
 ```
 
-Run from `src/SharedMarkdown` (or `dotnet run --project src/SharedMarkdown`). Needs the .NET 11 SDK and Node; the build type-checks and bundles `src/client` into `src/SharedMarkdown/dist` automatically. Data goes to `data/` next to the project, or to `DataDir` if set.
+Run from `src/SharedMarkdown` (or `dotnet run --project src/SharedMarkdown`). Needs the .NET 11 SDK and Node; the build type-checks and bundles `src/client` into `src/SharedMarkdown/wwwroot` and `app.html` automatically. `dotnet run` uses the Development environment (`Properties/launchSettings.json`); static assets from the build folder are only served there. Data goes to `data/` next to the project, or to `DataDir` if set.
 The admin dashboard is at `/admin`; it is disabled until a password is set:
 
 ```bash
@@ -22,7 +22,7 @@ Admin__Password=something dotnet run
 - **Real-time sync**: a hand-written RGA sequence CRDT over the markdown text, identical in `Documents/Rga.cs` and `src/client/src/rga.ts`. The server keeps a replica, writes it to SQLite every 2 s (`Documents/DocStore.cs`) and relays ops. Deleted characters are compacted away when a document is loaded. Other people's cursors are sent as CRDT anchors and drawn as unlabeled carets.
 - **Frontend** (`src/client`): TypeScript (strict) + [CodeMirror 6](https://codemirror.net), no framework, bundled by esbuild. `livepreview.ts` does Obsidian-style live preview, `table.ts` the table widget and toolbar, `hub.ts` is a ~60-line typed SignalR client, `sync.ts` the sync glue.
 - **Offline**: `sw.ts` (service worker, `/sw.js`) serves the last seen page when the network fails (network first, so deploys still arrive at once) and caches the hashed bundle and `/b/` images. `local.ts` keeps each opened document's RGA state and unsent ops in IndexedDB (last 50 documents, plus any with unsent edits); without a connection a document opens from that copy, and the ops are merged through the normal rejoin when the hub reconnects. Edits left in documents that aren't open are sent over a second connection after reconnecting (`offline.ts`).
-- **Assets**: one content-hashed JS file (`Cache-Control: immutable`), CSS inlined into the HTML, pre-compressed (brotli/gzip) in memory at startup (`Infrastructure/Assets.cs`). After a deploy, open tabs notice the new build on reconnect and reload, keeping unsent edits.
+- **Assets**: the bundle (`wwwroot/assets/app.js`) and service worker are ordinary static assets: `MapStaticAssets` fingerprints the bundle (`Cache-Control: immutable`) and serves it pre-compressed (gzip, plus brotli when published). The page (`app.html`, CSS inlined) is served by `Infrastructure/AppShell.cs` for every document URL with the fingerprinted bundle URL and a strict CSP. After a deploy, open tabs notice the new build on reconnect and reload, keeping unsent edits.
 
 ## Abuse protection
 

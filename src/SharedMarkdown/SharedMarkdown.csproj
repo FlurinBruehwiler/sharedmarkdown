@@ -20,22 +20,27 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Remove="dist/**" />
-    <None Remove="dist/**" />
     <ClientSource Include="$(ClientDir)/src/**;$(ClientDir)/index.html;$(ClientDir)/build.mjs;$(ClientDir)/package.json;$(ClientDir)/tsconfig.json" />
+    <None Update="app.html" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <!-- The frontend (../client) is bundled into dist/ here by its build.mjs and served from memory by Assets.cs. -->
+  <!--
+    The frontend (../client) builds into wwwroot/ (served by MapStaticAssets, which fingerprints and
+    compresses it) and app.html (served by AppShell.cs). It runs before the SDK collects static assets,
+    and declares its outputs itself so even a first build, before they exist, picks them up.
+  -->
   <Target Name="NpmInstall" BeforeTargets="BuildClient" Condition="!Exists('$(ClientDir)/node_modules')">
     <Exec Command="npm ci" WorkingDirectory="$(ClientDir)" />
   </Target>
-  <Target Name="BuildClient" BeforeTargets="Build" Inputs="@(ClientSource)" Outputs="dist/index.html">
+  <Target Name="BuildClient" BeforeTargets="BeforeBuild" Inputs="@(ClientSource)" Outputs="app.html;wwwroot/assets/app.js;wwwroot/sw.js">
     <Exec Command="node build.mjs" WorkingDirectory="$(ClientDir)" />
   </Target>
-  <Target Name="PublishClient" AfterTargets="ComputeResolvedFilesToPublishList" DependsOnTargets="BuildClient">
+  <Target Name="IncludeClientOutput" AfterTargets="BuildClient">
     <ItemGroup>
-      <ClientDist Include="dist/**" />
-      <ResolvedFileToPublish Include="@(ClientDist)" RelativePath="dist/%(RecursiveDir)%(Filename)%(Extension)" CopyToPublishDirectory="PreserveNewest" />
+      <Content Remove="wwwroot/assets/app.js;wwwroot/sw.js" />
+      <Content Include="wwwroot/assets/app.js;wwwroot/sw.js" />
+      <None Remove="app.html" />
+      <None Include="app.html" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     </ItemGroup>
   </Target>
 

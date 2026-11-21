@@ -9,7 +9,7 @@
 // Everything else (the hub, /api, the admin dashboard, /_blazor, /_framework…) isn't touched.
 export {}
 
-declare const __BUILD__: string // the bundle path, e.g. /assets/main-ABC123.js (build.mjs)
+declare const __BUILD__: string // a hash of this build (build.mjs)
 
 interface ExtendableEvent extends Event { waitUntil(p: Promise<unknown>): void }
 interface FetchEvent extends ExtendableEvent { readonly request: Request, respondWith(r: Response | Promise<Response>): void }
@@ -34,9 +34,9 @@ sw.addEventListener('install', e => e.waitUntil((async () => {
   const cache = await caches.open(CACHE)
   const shell = await fetch(SHELL, { cache: 'no-cache' })
   if (!shell.ok) throw new Error('shell ' + shell.status)
-  // The bundle this page uses (normally __BUILD__, unless another deploy happened in between).
-  const js = /src="(\/assets\/[^"]+\.js)"/.exec(await shell.clone().text())?.[1] ?? __BUILD__
-  await cache.add(js) // hashed and immutable: the HTTP cache copy (if any) is right
+  // The bundle this page uses: fingerprinted and immutable, so the HTTP cache copy (if any) is right.
+  const js = /src="(\/assets\/[^"]+\.js)"/.exec(await shell.clone().text())?.[1]
+  if (js) await cache.add(js)
   await cache.put(SHELL, shell)
   await sw.skipWaiting() // nothing in the old worker is worth waiting for: take over at once
 })()))
