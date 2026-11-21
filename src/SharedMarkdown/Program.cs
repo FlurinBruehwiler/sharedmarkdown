@@ -24,7 +24,9 @@ builder.Services.AddSerilog(log =>
             if (level.Key == "Default") log.MinimumLevel.Is(min);
             else log.MinimumLevel.Override(level.Key, min);
         }
-    log.WriteTo.Console(outputTemplate: "{Level:u3} {SourceContext}: {Message:lj}{NewLine}{Exception}")
+    // SignalR logs every HubException (our expected refusals: "rate", "deleted"…) as an error.
+    log.Filter.ByExcluding(e => e.Exception is Microsoft.AspNetCore.SignalR.HubException)
+       .WriteTo.Console(outputTemplate: "{Level:u3} {SourceContext}: {Message:lj}{NewLine}{Exception}")
        .WriteTo.File(Path.Combine(logFiles.Dir, LogFiles.FilePattern), outputTemplate: LogFiles.Template,
            rollingInterval: RollingInterval.Day, retainedFileCountLimit: 30, fileSizeLimitBytes: 20_000_000, rollOnFileSizeLimit: true);
 });
