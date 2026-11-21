@@ -31,6 +31,10 @@ const store = {
 
 // ---------- recent documents (this browser only) ----------
 
+/**
+ * A document in this browser's list. `at` is when it was added: the list is ordered by it, newest
+ * first, and never reshuffles when you click an entry (like tabs or a file list, unlike a recents list).
+ */
 interface DocEntry { id: string, title: string, at: number }
 let docs = store.get<DocEntry[]>('docs', [])
 /** Documents removed from the list; link discovery doesn't add them back until they are opened again. */
@@ -51,12 +55,11 @@ function titleOf(md: string) {
   return ''
 }
 
-function remember(id: string, title: string | null, touch: boolean) {
-  if (touch && dismissed.delete(id)) store.set('dismissed', [...dismissed])
+function remember(id: string, title: string | null, opened: boolean) {
+  if (opened && dismissed.delete(id)) store.set('dismissed', [...dismissed])
   let d = docs.find(d => d.id === id)
-  if (!d) docs.push(d = { id, title: '', at: 0 })
+  if (!d) docs.push(d = { id, title: '', at: Date.now() })
   if (title != null) d.title = title
-  if (touch) d.at = Date.now()
   store.set('docs', docs)
   renderList()
 }
@@ -113,7 +116,9 @@ function discoverLinks(md: string) {
     if (host && host !== location.host) continue
     const id = abs || rel
     if (id === current || dismissed.has(id) || docs.some(d => d.id === id)) continue
-    docs.push({ id, title: '', at: 0 })
+    // Right below the document that links to it.
+    const parent = docs.find(d => d.id === current)?.at ?? Date.now()
+    docs.push({ id, title: '', at: parent - 1 - docs.length / 1000 })
     added = true
   }
   if (added) { store.set('docs', docs); refreshTitles() }
