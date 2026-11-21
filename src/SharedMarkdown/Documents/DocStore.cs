@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
@@ -13,18 +14,22 @@ public class DocState(string id)
     public bool Dirty;
     public bool Deleted;
     public string CreatorIp = "";
+    /// Id of the read-only link (/r/{ReadId}), null until someone asks for one. Never sent to editors' peers.
+    public string? ReadId;
     public int Viewers;
     public DateTime LastTouched = DateTime.UtcNow;
     public readonly SemaphoreSlim Lock = new(1, 1);
 
-    /// True until the first edit; that edit counts as creating the document.
-    public bool IsNew => !Persisted && Doc.Items == 0;
+    /// True until the first edit (or read link); that counts as creating the document.
+    public bool IsNew => !Persisted && Doc.Items == 0 && ReadId == null;
 }
 
 /// Keeps live documents in memory, the SQLite copy is written behind by DocFlusher.
 public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILogger<DocStore> log)
 {
     readonly ConcurrentDictionary<string, DocState> _docs = new();
+    /// Read id -> edit id, for the documents in _docs that have one.
+    readonly ConcurrentDictionary<string, string> _readIds = new();
     readonly SemaphoreSlim _loadLock = new(1, 1);
 
     public int LiveCount => _docs.Count;
@@ -45,6 +50,8 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
                 s.Doc = Rga.Decode(row.State);
                 s.Persisted = true;
                 s.CreatorIp = row.CreatorIp;
+                s.ReadId = row.ReadId;
+                if (row.ReadId != null) _readIds[row.ReadId] = id;
                 // Nobody has it open (it wasn't in memory), so this is a safe moment to drop tombstones.
                 // Clients that reconnect with edits against the old ids fall back to a text merge.
                 if (s.Doc.Items - s.Doc.Length > Math.Max(1000, s.Doc.Length))
@@ -60,6 +67,28 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
         finally { _loadLock.Release(); }
     }
 
+    /// The edit id of the document with this read id, or null if there is none.
+    public async Task<string?> ResolveReadId(string readId)
+    {
+        if (_readIds.TryGetValue(readId, out var id)) return id;
+        using var scope = scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDb>();
+        return await db.Documents.Where(d => d.ReadId == readId).Select(d => d.Id).FirstOrDefaultAsync();
+    }
+
+    /// The document's read id, made up on first use. Saved with the next flush (a new, empty document
+    /// gets its row then too, so the link keeps working). Call with s.Lock held.
+    public string EnsureReadId(DocState s)
+    {
+        if (s.ReadId != null) return s.ReadId;
+        // 16 base62 characters (~95 bits), independent of the edit id; a different length than edit
+        // ids so the two kinds of link are easy to tell apart.
+        s.ReadId = RandomNumberGenerator.GetString("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", 16);
+        _readIds[s.ReadId] = s.Id;
+        s.Dirty = true;
+        return s.ReadId;
+    }
+
     public async Task Flush(bool evict)
     {
         using var scope = scopes.CreateScope();
@@ -70,8 +99,9 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
             if (s.Dirty && !s.Deleted)
             {
                 string content, state;
+                string? readId;
                 await s.Lock.WaitAsync();
-                try { content = s.Doc.Text(); state = s.Doc.Encode(); s.Dirty = false; }
+                try { content = s.Doc.Text(); state = s.Doc.Encode(); readId = s.ReadId; s.Dirty = false; }
                 finally { s.Lock.Release(); }
 
                 var title = TitleOf(content);
@@ -81,11 +111,12 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
                         .SetProperty(d => d.State, state)
                         .SetProperty(d => d.Content, content)
                         .SetProperty(d => d.Title, title)
+                        .SetProperty(d => d.ReadId, readId)
                         .SetProperty(d => d.UpdatedAt, now));
                 }
                 else
                 {
-                    db.Documents.Add(new Document { Id = s.Id, State = state, Content = content, Title = title, CreatorIp = s.CreatorIp, CreatedAt = now, UpdatedAt = now });
+                    db.Documents.Add(new Document { Id = s.Id, State = state, Content = content, Title = title, CreatorIp = s.CreatorIp, ReadId = readId, CreatedAt = now, UpdatedAt = now });
                     await db.SaveChangesAsync();
                     db.ChangeTracker.Clear();
                     s.Persisted = true;
@@ -94,6 +125,7 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
             else if (evict && s.Viewers == 0 && now - s.LastTouched > TimeSpan.FromMinutes(5))
             {
                 _docs.TryRemove(s.Id, out _);
+                if (s.ReadId != null) _readIds.TryRemove(s.ReadId, out _);
             }
         }
     }
@@ -102,7 +134,11 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
     public async Task Delete(IReadOnlyCollection<string> ids)
     {
         foreach (var id in ids)
-            if (_docs.TryRemove(id, out var s)) s.Deleted = true;
+            if (_docs.TryRemove(id, out var s))
+            {
+                s.Deleted = true;
+                if (s.ReadId != null) _readIds.TryRemove(s.ReadId, out _);
+            }
         using var scope = scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDb>();
         foreach (var chunk in ids.Chunk(500))
@@ -112,9 +148,23 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
         log.LogInformation("Deleted {Count} documents", ids.Count);
     }
 
-    public async Task<Dictionary<string, string>> Titles(IEnumerable<string> ids)
+    /// Titles by edit id, plus titles of read-only links keyed "r/{readId}" (never revealing the edit id).
+    public async Task<Dictionary<string, string>> Titles(IEnumerable<string> ids, IEnumerable<string>? readIds = null)
     {
         var result = new Dictionary<string, string>();
+        var missingRead = new List<string>();
+        foreach (var r in readIds ?? [])
+        {
+            if (_readIds.TryGetValue(r, out var editId) && _docs.TryGetValue(editId, out var rs)) result["r/" + r] = TitleOf(rs.Doc.Text());
+            else missingRead.Add(r);
+        }
+        if (missingRead.Count > 0)
+        {
+            using var scope = scopes.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDb>();
+            foreach (var d in await db.Documents.Where(d => d.ReadId != null && missingRead.Contains(d.ReadId)).Select(d => new { d.ReadId, Head = d.Content.Substring(0, 4000) }).ToListAsync())
+                result["r/" + d.ReadId] = TitleOf(d.Head);
+        }
         var missing = new List<string>();
         foreach (var id in ids)
         {
