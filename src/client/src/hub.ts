@@ -55,6 +55,8 @@ export class Hub {
   ws!: WebSocket // assigned by connect(), which the constructor calls
   last = 0 // time of the last message received
   timer?: ReturnType<typeof setInterval>
+  retryTimer?: ReturnType<typeof setTimeout>
+  stopped = false
 
   constructor(url: string) {
     this.url = url.replace(/^http/, 'ws')
@@ -66,6 +68,22 @@ export class Hub {
     this.onopen = null
     this.onstatus = null
     this.connect()
+    // Back online: reconnect now instead of waiting out the backoff (up to 10 s).
+    addEventListener('online', () => {
+      if (this.stopped || this.ws.readyState !== WebSocket.CLOSED) return // only while waiting to retry
+      clearTimeout(this.retryTimer)
+      this.delay = 0
+      this.connect()
+    })
+    // The OS says the network is gone: don't wait for the keep-alive timeout (35 s) to notice.
+    addEventListener('offline', () => { if (this.connected) this.ws.close() })
+  }
+
+  /** Closes the connection for good (no reconnect). */
+  stop() {
+    this.stopped = true
+    clearTimeout(this.retryTimer)
+    this.ws.close()
   }
 
   on<K extends keyof ClientEvents>(name: K, fn: (...args: ClientEvents[K]) => void) { this.handlers[name] = fn }
@@ -130,7 +148,8 @@ export class Hub {
     for (const c of this.calls.values()) c.reject(new Error('closed'))
     this.calls.clear()
     if (was) this.onstatus?.(false)
-    setTimeout(() => this.connect(), this.delay)
+    if (this.stopped) return
+    this.retryTimer = setTimeout(() => this.connect(), this.delay)
     this.delay = Math.min(this.delay * 2 || 500, 10000)
   }
 }

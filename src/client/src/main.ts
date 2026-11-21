@@ -9,6 +9,7 @@ import { tableEnter, tableArrow, insertTable } from './table'
 import { slashMenu } from './slash'
 import { Hub } from './hub'
 import { DocSync } from './sync'
+import { setupOffline } from './offline'
 
 /** An element from index.html, which always has it. */
 function $<T extends Element = HTMLElement>(sel: string): T {
@@ -93,6 +94,7 @@ function removeFromList(id: string) {
   dismissed.add(id)
   store.set('docs', docs)
   store.set('dismissed', [...dismissed])
+  sync.store.forget(id).catch(() => {})
   if (id === current) go(randomId(12))
   else renderList()
 }
@@ -129,6 +131,7 @@ function discoverLinks(md: string) {
 
 const hub = new Hub(location.origin + '/hub')
 const sync = new DocSync(hub, randomId(10))
+const offline = setupOffline(hub, sync)
 let titleTimer: ReturnType<typeof setTimeout> | undefined
 
 function openLink(href: string) {
@@ -243,6 +246,8 @@ function replaceSrc(view: EditorView, from: string, to: string | null) {
 function insertImages(view: EditorView, files: FileList, at?: number) {
   const images = Array.from(files).filter(f => f.type.startsWith('image/'))
   if (!images.length) return false
+  const offlineMessage = "You're offline; images can be pasted when you're back online."
+  if (!hub.connected) { notice(offlineMessage, 6000); return true }
   const inserts = images.map(f => {
     const token = `upload:${Date.now()}-${randomId(6)}`
     const preview = URL.createObjectURL(f)
@@ -262,7 +267,7 @@ function insertImages(view: EditorView, files: FileList, at?: number) {
       localImages.delete(token)
       URL.revokeObjectURL(preview)
       replaceSrc(view, token, null)
-      notice('Upload failed: ' + e.message, 6000)
+      notice(e instanceof TypeError || !hub.connected ? offlineMessage : 'Upload failed: ' + e.message, 6000) // fetch fails with a TypeError
     })
   return true
 }
@@ -509,9 +514,9 @@ hub.onopen = async () => {
     location.reload()
     return
   }
-  sync.join()
+  await sync.join()
+  offline.syncOthers()
 }
-hub.onstatus = online => document.body.classList.toggle('offline', !online)
 hub.on('presence', n => { $('#people').textContent = n > 1 ? n + ' here' : '' })
 sync.onload = () => {
   try {
@@ -520,6 +525,8 @@ sync.onload = () => {
     if (saved?.id === current) sync.mergeText(saved.text)
   } catch {}
   if (view.state.doc.length) remember(current, null, true)
+  else if (!hub.connected && !sync.cached && docs.some(d => d.id === current))
+    notice("This document isn't stored on this device yet; it loads when you're back online.", 6000)
   onTextChanged()
 }
 
@@ -570,7 +577,6 @@ $('#theme').onclick = () => {
   root.dataset.theme = dark ? 'light' : 'dark'
   store.set('theme', root.dataset.theme)
 }
-window.addEventListener('beforeunload', e => { if (sync.dirty) e.preventDefault() })
 
 const m = location.pathname.match(ID)
 const first = m ? m[1] : randomId(12)
