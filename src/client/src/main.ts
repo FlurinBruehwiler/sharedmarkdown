@@ -246,7 +246,7 @@ function replaceSrc(view: EditorView, from: string, to: string | null) {
 function insertImages(view: EditorView, files: FileList, at?: number) {
   const images = Array.from(files).filter(f => f.type.startsWith('image/'))
   if (!images.length) return false
-  const offlineMessage = "You're offline; images can be pasted when you're back online."
+  const offlineMessage = "You're offline; images can be added when you're back online."
   if (!hub.connected) { notice(offlineMessage, 6000); return true }
   const inserts = images.map(f => {
     const token = `upload:${Date.now()}-${randomId(6)}`
