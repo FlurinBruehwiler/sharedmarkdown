@@ -120,7 +120,10 @@ export function insertOnOwnLine(view: EditorView, at: number, md: string) {
   const before = line.text.slice(0, at - line.from), after = line.text.slice(at - line.from)
   const from = before.trim() ? line.from + before.trimEnd().length : at
   const to = after.trim() ? line.to - after.trimStart().length : at
-  const insert = (from > line.from ? '\n' : '') + md + (to < line.to ? '\n' : '')
+  const prevLine = from > line.from ? line.text : line.number > 1 ? view.state.doc.line(line.number - 1).text : ''
+  // A line right after a table would become a table row.
+  const afterTable = /^\s*\|/.test(prevLine)
+  const insert = (from > line.from ? '\n' : '') + (afterTable ? '\n' : '') + md + (to < line.to ? '\n' : '')
   view.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, userEvent: 'input.drop' })
   view.focus()
 }
