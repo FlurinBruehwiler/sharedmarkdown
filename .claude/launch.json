@@ -1,6 +1,6 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "sharedmarkdown", "runtimeExecutable": "dotnet", "runtimeArgs": ["run", "--urls", "http://localhost:5199"], "port": 5199 }
+    { "name": "sharedmarkdown", "runtimeExecutable": "dotnet", "runtimeArgs": ["run", "--project", "src/SharedMarkdown", "--urls", "http://localhost:5199"], "port": 5199 }
   ]
 }

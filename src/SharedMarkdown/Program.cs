@@ -8,7 +8,7 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using SharedMarkdown;
-using SharedMarkdown.Components;
+using SharedMarkdown.Admin;
 
 var builder = WebApplication.CreateBuilder(args);
 

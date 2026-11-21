@@ -1,4 +1,4 @@
-// Bundles the frontend into ../dist: one hashed (cache-forever) JS file, CSS inlined into index.html.
+// Bundles the frontend into ../SharedMarkdown/dist: one hashed (cache-forever) JS file, CSS inlined into index.html.
 import * as esbuild from 'esbuild'
 import { execSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -7,7 +7,8 @@ import path from 'node:path'
 // Type-check first: esbuild only strips types, so a type error would otherwise ship.
 try { execSync('npx tsc -p .', { stdio: 'inherit' }) } catch { process.exit(1) }
 
-const out = '../dist'
+// Output goes into the server project, which serves it (see Assets.cs).
+const out = '../SharedMarkdown/dist'
 fs.rmSync(out, { recursive: true, force: true })
 
 const result = await esbuild.build({

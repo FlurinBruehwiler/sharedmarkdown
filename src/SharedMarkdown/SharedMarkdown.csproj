@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <ClientDir>$(MSBuildProjectDirectory)/client</ClientDir>
+    <ClientDir>$(MSBuildProjectDirectory)/../client</ClientDir>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,13 +20,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Remove="client/**;dist/**" />
-    <None Remove="client/**;dist/**" />
-    <Compile Remove="client/**" />
-    <ClientSource Include="client/src/**;client/index.html;client/build.mjs;client/package.json" />
+    <Content Remove="dist/**" />
+    <None Remove="dist/**" />
+    <ClientSource Include="$(ClientDir)/src/**;$(ClientDir)/index.html;$(ClientDir)/build.mjs;$(ClientDir)/package.json;$(ClientDir)/tsconfig.json" />
   </ItemGroup>
 
-  <!-- The frontend is bundled into dist/ by client/build.mjs and served from memory by Assets.cs. -->
+  <!-- The frontend (../client) is bundled into dist/ here by its build.mjs and served from memory by Assets.cs. -->
   <Target Name="NpmInstall" BeforeTargets="BuildClient" Condition="!Exists('$(ClientDir)/node_modules')">
     <Exec Command="npm ci" WorkingDirectory="$(ClientDir)" />
   </Target>

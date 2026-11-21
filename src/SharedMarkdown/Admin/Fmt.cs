@@ -1,4 +1,4 @@
-namespace SharedMarkdown.Components.Admin;
+namespace SharedMarkdown.Admin;
 
 static class Fmt
 {
