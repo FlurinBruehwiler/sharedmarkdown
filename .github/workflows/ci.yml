@@ -40,7 +40,7 @@ jobs:
         with:
           host: sharedmarkdown.com
           key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          username: sharedmarkdown
+          username: studue
           source: "./ReleaseBuild"
           target: "/opt/sharedmarkdown/releases/current"
           rm: true
@@ -50,5 +50,5 @@ jobs:
         with:
           host: sharedmarkdown.com
           key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          username: sharedmarkdown
+          username: studue
           script: sudo systemctl restart sharedmarkdown
