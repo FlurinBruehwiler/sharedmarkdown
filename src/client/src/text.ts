@@ -1,6 +1,3 @@
-// Plain-text helpers: diffs and a three-way merge. No editor or CRDT types here.
-
-/** One splice: replace `d` characters at `p` with `i`. */
 export interface Splice { p: number, d: number, i: string }
 /** Replace [from, to) with `insert`. A list of edits is sorted and non-overlapping, in the coordinates of the original text. */
 export interface Edit { from: number, to: number, insert: string }
@@ -15,7 +12,6 @@ export function diff(a: string, b: string): Splice {
   return { p: s, d: a.length - s - e, i: b.slice(s, b.length - e) }
 }
 
-/** A changed region: a[aFrom, aTo) became b[bFrom, bTo). */
 type Hunk = [aFrom: number, aTo: number, bFrom: number, bTo: number]
 
 /**
@@ -38,7 +34,6 @@ function myers(n: number, m: number, eq: (i: number, j: number) => boolean, maxD
     trace.push(v.slice(off - d, off + d + 1))
   }
   if (end < 0) return null
-  // Walk back through the trace, collecting single edits from the end.
   const edits: [del: boolean, x: number, y: number][] = []
   let x = n, y = m
   for (let d = end; d > 0; d--) {
@@ -60,7 +55,6 @@ function myers(n: number, m: number, eq: (i: number, j: number) => boolean, maxD
   return hunks
 }
 
-/** Lines of `s`, each with its line break. */
 const lines = (s: string) => s.match(/[^\n]*\n|[^\n]+$/g) ?? []
 
 /**
@@ -73,12 +67,10 @@ export function diffText(a: string, b: string): Edit[] {
   if (!d && !i) return []
   const as = a.slice(p, p + d), bs = i
   const la = lines(as), lb = lines(bs)
-  // Interned line ids, so comparing lines is comparing numbers.
   const ids = new Map<string, number>()
   const id = (l: string) => { let n = ids.get(l); if (n === undefined) ids.set(l, n = ids.size); return n }
   const ia = la.map(id), ib = lb.map(id)
   const lineHunks = myers(ia.length, ib.length, (x, y) => ia[x] === ib[y], 2000) ?? [[0, ia.length, 0, ib.length]]
-  // Line index -> character offset within as / bs.
   const offsets = (ls: string[]) => { const o = [0]; for (const l of ls) o.push(o[o.length - 1] + l.length); return o }
   const oa = offsets(la), ob = offsets(lb)
   const out: Edit[] = []

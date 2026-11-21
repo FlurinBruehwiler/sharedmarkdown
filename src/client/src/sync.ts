@@ -12,23 +12,17 @@ const cursorsChanged = StateEffect.define<null>()
 
 type Timer = ReturnType<typeof setTimeout>
 
-/** What DocSync needs of the hub (tests pass a fake). */
 export type SyncHub = Pick<Hub, 'invoke' | 'send' | 'on' | 'connected'>
 
 export interface SyncEvents {
-  /** The sync state changed (unsent edits, saved, loaded): for the status line. */
   change: []
-  /** The open document finished loading (from the server, or this device's copy while offline). */
   load: []
-  /** An administrator deleted this document; this device's copy is dropped. */
   deleted: [key: string]
 }
 
 export interface DocSyncOptions {
   hub: SyncHub
-  /** This tab's RGA client id. */
   client: string
-  /** This device's copy of documents; defaults to IndexedDB. */
   store?: LocalDocs
   notice: (message: string, ms?: number) => void
   clearNotice: () => void
@@ -37,10 +31,6 @@ export interface DocSyncOptions {
 /**
  * Keeps one document in sync. The editor text is exactly the RGA text: local editor changes
  * become RGA ops sent to the server, remote ops are integrated and applied to the editor as changes.
- *
- * Offline: the state and the unsent ops are also kept on this device (local.ts, via LocalCopy),
- * written shortly after every change. A document opened without a connection shows that copy and
- * can be edited; the ops pile up in the outbox and join() merges them when the connection is back.
  */
 export class DocSync extends Emitter<SyncEvents> {
   readonly hub: SyncHub
@@ -57,30 +47,22 @@ export class DocSync extends Emitter<SyncEvents> {
   /** Bumped by every open(); async work checks it after each await and gives up if it changed. */
   seq = 0
   rga: Rga
-  /** The editor shows the document (joined, or this device's copy while offline). */
   loaded = false
   /** The connection is joined to the document (Submit goes to it). Cleared on disconnect. */
   joined = false
   /** `seq` of the join() in flight, or 0. Remote ops are buffered meanwhile. */
   joining = 0
-  /** Set when an administrator deleted the open document: nothing is sent or saved any more. */
   deleted = false
-  /** Documents deleted by an administrator while this tab was open: never saved again. */
   readonly gone = new Set<string>()
-  /** A Submit was refused for a rate limit: retrying, with a notice up. */
   limited = false
-  /** Ops not yet sent. */
   outbox: Op[] = []
-  /** Ops sent, waiting for the ack. */
   inflight: Op[] | null = null
   /** Remote ops received while joining. */
   buffer: Op[] = []
-  /** Peer -> [client, clock] anchor of their cursor. */
   readonly cursors = new Map<string, Id>()
   lastCursor: string | null = null
   maxChars = 0
   maxImageDimension = 2000
-  /** Stored copy of the open document, shown if it opens without a connection. */
   cached: DocRecord | null = null
   /** A stored copy in an older format (ops unusable): merged as text once joined. */
   recover: { text: string, base?: string } | null = null
@@ -119,7 +101,6 @@ export class DocSync extends Emitter<SyncEvents> {
   extension(): Extension {
     const sync = this
     return [
-      // Refuse local edits that would grow the document past the server's size limit.
       EditorState.transactionFilter.of(tr => {
         if (!tr.docChanged || tr.annotation(remote) || !sync.maxChars) return tr
         if (tr.newDoc.length > sync.maxChars && tr.newDoc.length > tr.startState.doc.length) {
@@ -147,23 +128,17 @@ export class DocSync extends Emitter<SyncEvents> {
     ]
   }
 
-  /** Opened through a read-only link: nothing is ever submitted. */
   get readOnly() { return isReadKey(this.key) }
-  /** True while open() switches documents; join() and loadLocal() wait for it. */
   get switching() { return this.draining !== null }
-  /** Unsent ops of the open document, oldest first. */
   get pending() { return [...this.inflight || [], ...this.outbox] }
   get dirty() { return !!(this.outbox.length || this.inflight) }
-  /** Edits that would be lost if the tab closed now: unsent and not (yet) on disk. */
   get unsaved() { return this.dirty && !this.copy.saved }
 
-  /** The editor; extension()'s plugin sets it when the view is created, before any document opens. */
   get editor(): EditorView {
     if (!this.view) throw new Error('DocSync: editor view not created yet')
     return this.view
   }
 
-  /** Switches to document `key`. `reset` gives the editor a fresh state once the old document is detached. */
   async open(key: string, reset: () => void) {
     const seq = ++this.seq
     // Unsent ops in the outbox belong to the document being left (or still being left, if a switch is under way).
@@ -188,13 +163,12 @@ export class DocSync extends Emitter<SyncEvents> {
       prev.ops = compactOps(this.pending)
       await this.copy.write(prev)
     }
-    if (seq !== this.seq) return // another open() took over
+    if (seq !== this.seq) return
     this.rga = new Rga(this.client)
     this.outbox = []
     this.inflight = null
     this.cached = null
     this.recover = null
-    // Unsent ops kept on this device (ours, or of tabs that were closed) are merged like any unsent edit.
     const { doc, pending } = await this.store.load(key)
     if (seq !== this.seq) return
     this.draining = null
@@ -210,10 +184,9 @@ export class DocSync extends Emitter<SyncEvents> {
     else this.offlineTimer = setTimeout(() => this.loadLocal(), typeof navigator !== 'undefined' && navigator.onLine === false ? 0 : 1500)
   }
 
-  /** Shows the stored copy (or an empty new document) while there is no connection; edits go to the outbox. */
   loadLocal() {
     if (this.loaded || this.joining || this.switching || this.deleted || !this.key || this.hub.connected) return
-    const typed = this.editor.state.doc.toString() // typed before this
+    const typed = this.editor.state.doc.toString()
     this.rga.load(this.cached?.state ?? [])
     applyAll(this.rga, this.outbox) // normally already in the stored state, unless another tab wrote it last
     this.loaded = true
@@ -222,13 +195,11 @@ export class DocSync extends Emitter<SyncEvents> {
     this.emit('load')
   }
 
-  /** Shows the loaded document in the editor. Text typed while it loaded is kept if the document turned out empty. */
   show(typed: string) {
     if (typed && !this.rga.text()) this.outbox.push(...this.rga.splice(0, 0, typed))
     else this.replaceAll(this.rga.text())
   }
 
-  /** (Re)joins the open document; local edits (unsent, or made while joining) survive. */
   async join() {
     const key = this.key, seq = this.seq
     if (!key || this.deleted || this.switching || this.joining === seq) return
@@ -253,22 +224,20 @@ export class DocSync extends Emitter<SyncEvents> {
         this.notice('Opening documents too quickly, retrying in a moment…')
         this.joinRetryTimer = setTimeout(() => { this.joinRetryTimer = undefined; this.join() }, 15000)
       } else if (code !== 'offline' && code !== 'closed') console.warn('Joining the document failed', e)
-      this.loadLocal() // meanwhile show this device's copy, if not connected
+      this.loadLocal()
       return
     } finally { if (this.joining === seq) this.joining = 0 }
-    if (seq !== this.seq) return // switched to another document meanwhile
+    if (seq !== this.seq) return
     this.joined = true
     this.maxChars = res.maxChars
     this.maxImageDimension = res.maxImageDimension
-    const typed = wasLoaded ? '' : this.editor.state.doc.toString() // typed before the document finished loading
+    const typed = wasLoaded ? '' : this.editor.state.doc.toString()
     const pending = this.pending
-    // This device's side of a merge: the copy on screen, or the stored one if it never showed.
     const local = wasLoaded ? this.rga : this.cached && pending.length ? replicaOf(this.client, this.cached.state, pending) : null
     const server = new Rga(this.client)
     server.load(res.state)
     server.clock = Math.max(server.clock, this.rga.clock) // never reuse a clock this tab already used
-    // Our unsent edits normally apply as they are; the rest are merged as text (merge.ts). Ops kept
-    // offline may come from several tabs; applyAll orders them.
+    // Ops kept offline may come from several tabs; applyAll orders them.
     this.outbox = rebase(server, pending, local)
     if (this.recover) this.outbox.push(...mergeText(server, this.recover.base ?? server.text(), this.recover.text))
     this.recover = null
@@ -285,12 +254,10 @@ export class DocSync extends Emitter<SyncEvents> {
     this.flush()
   }
 
-  /** Joins again (to reload the server's version), unless a rate-limit retry is already scheduled. */
   rejoin() {
     if (this.joinRetryTimer === undefined) this.join()
   }
 
-  /** An administrator deleted document `key`: stop syncing it and drop this device's copy. */
   documentDeleted(key: string) {
     if (!key) return
     if (!this.gone.has(key)) this.store.drop(key).catch(e => console.warn('Dropping the deleted document failed', e))
@@ -309,7 +276,6 @@ export class DocSync extends Emitter<SyncEvents> {
     this.emit('deleted', key)
   }
 
-  /** Brings the document to `text` as a local edit: a three-way merge of base -> text (edits kept across a reload). */
   restore(text: string, base: string) {
     if (!this.loaded || this.readOnly) return
     const ops = mergeText(this.rga, base, text)
@@ -320,7 +286,6 @@ export class DocSync extends Emitter<SyncEvents> {
     this.flush()
   }
 
-  /** The open document's text and the base of its unsent edits (for keeping them across a reload). */
   unsentEdits(): { key: string, text: string, base: string } | null {
     if (!this.loaded || !this.dirty) return null
     return { key: this.key, text: this.rga.text(), base: this.rga.textWithout(this.pending) }
@@ -347,7 +312,6 @@ export class DocSync extends Emitter<SyncEvents> {
     if (!this.loaded || this.readOnly) return
     const list: [from: number, to: number, text: string][] = []
     changes.iterChanges((fromA, toA, _fromB, _toB, text) => list.push([fromA, toA, text.toString()]))
-    // Apply back to front so earlier positions stay valid.
     for (let i = list.length - 1; i >= 0; i--) {
       const [from, to, text] = list[i]
       this.outbox.push(...this.rga.splice(from, to - from, text))
@@ -366,7 +330,6 @@ export class DocSync extends Emitter<SyncEvents> {
     this.copy.changed()
   }
 
-  /** Sends the outbox of document `key` (the open one, or the one being left while switching). */
   async flush(key = this.key) {
     const leaving = key === this.draining
     if (!leaving && (key !== this.key || !this.loaded || this.switching)) return
@@ -402,7 +365,6 @@ export class DocSync extends Emitter<SyncEvents> {
     if (open) this.rejoin() // refused edit: reload the server's version
   }
 
-  /** Sends what's left of document `key`'s outbox (before switching away from it), for up to 2 s. */
   async drain(key: string) {
     clearTimeout(this.flushTimer)
     for (let i = 0; i < 40 && (this.outbox.length || this.inflight) && this.hub.connected; i++) {
@@ -411,7 +373,6 @@ export class DocSync extends Emitter<SyncEvents> {
     }
   }
 
-  // ---------- ghost cursors ----------
 
   cursorMoved() {
     clearTimeout(this.cursorTimer)
@@ -453,10 +414,6 @@ class Caret extends WidgetType {
   }
 }
 
-/**
- * Applies the change `base` -> `ours` to `rga` as a three-way merge with its current text, as local
- * edits. Returns their ops.
- */
 export function mergeText(rga: Rga, base: string, ours: string): Op[] {
   const edits = merge3(base, ours, rga.text())
   const ops: Op[] = []
@@ -468,11 +425,7 @@ export function mergeText(rga: Rga, base: string, ours: string): Op[] {
   return ops
 }
 
-/**
- * Integrates this device's unsent ops into `server` (a replica loaded with the server's state).
- * `local` is this device's copy with those ops applied, if there is one: the ops that don't apply
- * are merged as text from it. Returns the ops to send.
- */
+/** Integrates this device's unsent ops into `server`; the ones that no longer apply are merged as text from `local`. */
 export function rebase(server: Rga, pending: Op[], local: Rga | null): Op[] {
   const { ok, applied } = applyAll(server, pending)
   if (ok) return applied
@@ -486,7 +439,6 @@ export function rebase(server: Rga, pending: Op[], local: Rga | null): Op[] {
   return [...applied, ...mergeText(server, local.textWithout(failed), local.text())]
 }
 
-/** A replica of a stored state with `ops` applied (normally they already are), for rebase(). */
 export function replicaOf(client: string, state: StateRun[], ops: Op[]) {
   const rga = new Rga(client)
   rga.load(state)

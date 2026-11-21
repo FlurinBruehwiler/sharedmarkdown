@@ -8,7 +8,6 @@ const RS = '\x1e'
 export class Emitter<E extends { [K in keyof E]: unknown[] }> {
   readonly #handlers = new Map<keyof E, Set<(...args: never[]) => void>>()
 
-  /** Adds a handler; returns a function that removes it. */
   on<K extends keyof E>(name: K, fn: (...args: E[K]) => void): () => void {
     let set = this.#handlers.get(name)
     if (!set) this.#handlers.set(name, set = new Set())
@@ -28,7 +27,6 @@ export interface ClientEvents {
   /** A peer's cursor anchor; client is null when the peer left. */
   cursor: [peer: string, client: string | null, clock: number]
   peer: []
-  /** An administrator deleted the joined document. */
   deleted: []
   presence: [viewers: number]
 }
@@ -41,7 +39,6 @@ export interface ConnectionEvents {
 export type HubEvents = ClientEvents & ConnectionEvents
 
 export interface JoinResult { state: StateRun[], maxChars: number, maxImageDimension: number }
-/** "ok", or why the batch was refused ("deleted": an administrator removed the document). */
 export type SubmitStatus = 'ok' | 'invalid' | 'size' | 'create' | 'rate' | 'readonly' | 'deleted'
 
 /**
@@ -51,7 +48,6 @@ export type SubmitStatus = 'ok' | 'invalid' | 'size' | 'create' | 'rate' | 'read
 export type HubError = 'bad id' | 'rate' | 'not found' | 'deleted' | 'invalid' | 'create' | 'offline' | 'closed'
 const HUB_ERRORS: readonly string[] = ['bad id', 'rate', 'not found', 'deleted', 'invalid', 'create', 'offline', 'closed'] satisfies HubError[]
 
-/** The error code of a failed invoke(), or null for anything else. */
 export function hubError(e: unknown): HubError | null {
   return e instanceof Error && HUB_ERRORS.includes(e.message) ? e.message as HubError : null
 }
@@ -68,7 +64,6 @@ export interface ServerMethods {
   Cursor: { args: [client: string, clock: number], result: void }
 }
 
-/** The targets of ClientEvents; other targets from the server are ignored. */
 const SERVER_EVENTS: { [K in keyof ClientEvents]: true } = { ops: true, cursor: true, peer: true, deleted: true, presence: true }
 
 /** Hub protocol messages we receive (the handshake response is just `{}` or `{ error }`). */
@@ -85,15 +80,14 @@ type Outgoing =
 
 interface Call { resolve: (result: unknown) => void, reject: (e: Error) => void }
 
-/** Hub connection: hub.on() takes server calls (ClientEvents) and connection events ('open', 'status'). */
 export class Hub extends Emitter<HubEvents> {
   readonly url: string
   readonly calls = new Map<string, Call>()
   n = 0
   delay = 0
   connected = false
-  ws!: WebSocket // assigned by connect(), which the constructor calls
-  last = 0 // time of the last message received
+  ws!: WebSocket
+  last = 0
   keepAliveTimer?: ReturnType<typeof setInterval>
   retryTimer?: ReturnType<typeof setTimeout>
   stopped = false
@@ -117,7 +111,6 @@ export class Hub extends Emitter<HubEvents> {
   /** The OS says the network is gone: don't wait for the keep-alive timeout (35 s) to notice. */
   readonly offline = () => { if (this.connected) this.ws.close() }
 
-  /** Closes the connection for good (no reconnect) and lets go of the window's listeners. */
   stop() {
     this.stopped = true
     clearTimeout(this.retryTimer)
@@ -152,7 +145,6 @@ export class Hub extends Emitter<HubEvents> {
       return
     }
     if (m.type === 1) {
-      // The server sends the arguments ClientEvents declares for each target.
       if (m.target in SERVER_EVENTS) this.emit(m.target as keyof ClientEvents, ...m.arguments as never)
     } else if (m.type === 3) {
       const c = this.calls.get(m.invocationId)
@@ -163,12 +155,10 @@ export class Hub extends Emitter<HubEvents> {
 
   post(m: Outgoing) { this.ws.send(JSON.stringify(m) + RS) }
 
-  /** Fire-and-forget call. */
   send<K extends keyof ServerMethods>(target: K, ...args: ServerMethods[K]['args']) {
     if (this.connected) this.post({ type: 1, target, arguments: args })
   }
 
-  /** Calls a hub method. Rejects with an Error whose message hubError() reads. */
   invoke<K extends keyof ServerMethods>(target: K, ...args: ServerMethods[K]['args']) {
     return new Promise<ServerMethods[K]['result']>((resolve, reject) => {
       if (!this.connected) return reject(new Error('offline' satisfies HubError))

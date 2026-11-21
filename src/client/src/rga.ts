@@ -9,7 +9,6 @@ export type DeleteOp = ['d', client: string, clock: number, count: number]
 export type Op = InsertOp | DeleteOp
 /** Document state as runs in document order: [client, clock, text, deleted]. */
 export type StateRun = [client: string, clock: number, text: string, deleted: 0 | 1]
-/** An item id: [client, clock]. */
 export type Id = [client: string, clock: number]
 /** A text change relative to the text after the previous change. */
 export interface TextChange { from: number, to: number, insert: string }
@@ -19,7 +18,6 @@ interface Item { c: string, k: number, ch: string, del: boolean }
 const gt = (a: Item, c: string, k: number) => a.k !== k ? a.k > k : a.c > c
 const key = (c: string, k: number) => c + ':' + k
 
-/** Collects a change list, extending the previous change where the next one continues it (typing, deleting a range). */
 class Changes {
   list: TextChange[] = []
   last: TextChange | null = null
@@ -102,7 +100,6 @@ export class Rga {
     return out.list
   }
 
-  /** Integrates one insert run: one walk to its origin, then the new items go in as a block. */
   insert(op: InsertOp, out: Changes) {
     const [, c, k, oc, ok, text] = op
     if (this.has(c, k, text.length)) return // already integrated (sent twice)
@@ -175,7 +172,7 @@ export class Rga {
 
   /**
    * The text as it was before `ops` (this replica's own, unconfirmed ops): their inserted characters
-   * left out, the characters they deleted shown. The base of a three-way merge (merge.ts).
+   * left out, the characters they deleted shown. The base of a three-way merge (sync.ts rebase).
    */
   textWithout(ops: Op[]) {
     const inserted = new Set<string>(), deleted = new Set<string>()
@@ -191,7 +188,6 @@ export class Rga {
     return s
   }
 
-  /** Whether items (c, k .. k + n - 1) all exist (deleted or not). */
   has(c: string, k: number, n = 1) {
     for (let j = 0; j < n; j++) if (!this.byId.has(key(c, k + j))) return false
     return true

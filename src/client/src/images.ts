@@ -1,13 +1,8 @@
-// Images pasted, dropped or picked: shrunk in the browser, uploaded to /api/blobs, and shown at
-// once from the local file while the upload runs.
 import { ViewPlugin, type EditorView } from '@codemirror/view'
 import { randomId } from './ids'
 
-/** What image insertion needs from the app. */
 export interface ImageContext {
-  /** Whether the hub is connected (uploads need the server). */
   online: () => boolean
-  /** The server's size limit (longest side, px). */
   maxDimension: () => number
   notice: (message: string, ms?: number) => void
 }
@@ -21,7 +16,6 @@ export const localImages = new Map<string, string>()
 
 /** Upload placeholders are `upload:<unix ms>-<random>`, so everyone can tell how old one is. */
 const uploadSrc = () => `upload:${Date.now()}-${randomId(6)}`
-/** When the upload behind an `upload:` src started (ms), or null if `src` isn't one. */
 export function uploadStarted(src: string) {
   const m = /^upload:(\d+)-/.exec(src)
   return m ? Number(m[1]) : null
@@ -120,7 +114,6 @@ export function insertImages(ctx: ImageContext, view: EditorView, files: FileLis
   return true
 }
 
-/** Inserts dropped markdown at `at` on line(s) of its own, rather than splitting a word or sentence inline. */
 export function insertOnOwnLine(view: EditorView, at: number, md: string) {
   const line = view.state.doc.lineAt(at)
   // Splitting a line between words: the space there goes, not onto the start of the next line.
@@ -132,7 +125,6 @@ export function insertOnOwnLine(view: EditorView, at: number, md: string) {
   view.focus()
 }
 
-/** Opens the file picker and inserts the chosen images at the selection. */
 export function pickImages(ctx: ImageContext, view: EditorView) {
   const input = document.createElement('input')
   input.type = 'file'
@@ -154,7 +146,6 @@ export function dropPos(view: EditorView, e: MouseEvent): number | null {
   return view.posAtCoords({ x: Math.min(Math.max(e.clientX, r.left + 1), r.right - 1), y: e.clientY }, false)
 }
 
-/** A drag that carries files from outside the page (the desktop, a file manager). */
 const draggingFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files')
 
 /**

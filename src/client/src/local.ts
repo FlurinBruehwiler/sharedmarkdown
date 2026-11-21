@@ -16,7 +16,7 @@ import { compactOps, type Op, type Rga, type StateRun } from './rga'
 export const FORMAT = 1
 const MAX_DOCS = 50
 
-/** A document's stored copy. `key` is the document key (ids.ts). `base` is missing in records written before it existed. */
+/** `base`: the text without this device's unsent edits; missing in records written before it existed. */
 export interface DocRecord { key: string, v: number, state: StateRun[], text: string, base?: string, at: number }
 /** A tab's unsent ops for a document; `name` is the record's own key ("{document key} {client}"). */
 export interface PendingRecord { name: string, key: string, client: string, v: number, ops: Op[], at: number }
@@ -117,7 +117,6 @@ export class LocalDocs {
     await done(tx)
   }
 
-  /** Drops everything about a document, pending ops included (it was deleted on the server). */
   async drop(key: string) {
     const db = await this.db
     if (!db) return
@@ -128,7 +127,6 @@ export class LocalDocs {
     await done(tx)
   }
 
-  /** Keeps the MAX_DOCS most recently used documents, and any document with unsent edits. */
   async evict() {
     const db = await this.db
     if (!db) return
@@ -139,7 +137,6 @@ export class LocalDocs {
     await done(tx)
   }
 
-  /** Pending ops of documents other than `except` that no open tab is responsible for, grouped by document key. */
   async orphans(except: string | null): Promise<Map<string, PendingRecord[]>> {
     const db = await this.db
     const out = new Map<string, PendingRecord[]>()
@@ -180,7 +177,6 @@ export class LocalDocs {
 // Kept up to date by DocSync: saved shortly after every change, and right away when the tab is hidden or closed.
 
 
-/** What gets written: the document, this tab's unsent ops, and the closed tabs' records they replace. */
 export interface Snapshot { doc: DocRecord, ops: Op[], adopted: string[], version: number }
 /** The open document's state; null while there's nothing to save (loading, switching, deleted). */
 export type Source = () => { rga: Rga, pending: Op[] } | null
@@ -189,7 +185,6 @@ export class LocalCopy {
   readonly store: LocalDocs
   readonly source: Source
   readonly onChange: () => void
-  /** Key of the document this copy is of. */
   key = ''
   /** Pending records of closed tabs whose ops are in our outbox; removed when we next save ours. */
   adopted: string[] = []
@@ -207,7 +202,6 @@ export class LocalCopy {
     this.onChange = onChange
   }
 
-  /** Switches to another document; `adopted` are the closed tabs' pending records taken over. */
   reset(key: string, adopted: string[]) {
     clearTimeout(this.persistTimer)
     this.key = key
@@ -215,7 +209,6 @@ export class LocalCopy {
     this.saved = true
   }
 
-  /** Current state and unsent ops of the open document, for saving. */
   snapshot(): Snapshot | null {
     const src = this.source()
     if (!src) return null
@@ -242,7 +235,6 @@ export class LocalCopy {
     this.onChange()
   }
 
-  /** Saves the open document shortly (changes come in bursts). */
   changed() {
     if (!this.source()) return
     this.version++
@@ -252,7 +244,6 @@ export class LocalCopy {
     this.onChange()
   }
 
-  /** Saves the open document now (e.g. the tab is being hidden or closed). */
   persist() {
     clearTimeout(this.persistTimer)
     const snap = this.snapshot()

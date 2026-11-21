@@ -31,13 +31,10 @@ interface DocEntry { key: string, title: string, at: number }
 interface StoredEntry { id: string, title: string, at: number }
 
 export interface SidebarOptions {
-  /** The #list element. */
   el: HTMLElement
   /** Key of the open document ('' before the first one opens). */
   current: () => string
-  /** The open document was removed from the list: open another one. */
   leave: () => void
-  /** Forget this device's copy of a removed document. */
   forget: (key: string) => void
 }
 
@@ -61,7 +58,6 @@ export class Sidebar {
   has(key: string) { return this.docs.some(d => d.key === key) }
   title(key: string) { return this.docs.find(d => d.key === key)?.title || null }
 
-  /** Adds `key` to the list (if new) and sets its title; `opened` brings back a dismissed document. */
   remember(key: string, title: string | null, opened: boolean) {
     if (opened) this.dismissed.delete(key)
     let d = this.docs.find(d => d.key === key)
@@ -71,7 +67,6 @@ export class Sidebar {
     this.render()
   }
 
-  /** The open document's text changed: update its entry, and add the documents it links to. */
   textChanged(key: string, md: string) {
     if ((md.trim() || this.docs.some(d => d.key === key)) && !this.dismissed.has(key)) this.remember(key, titleOf(md), false)
     this.discoverLinks(key, md)
@@ -109,7 +104,6 @@ export class Sidebar {
     if (key === this.opts.current()) this.opts.leave()
   }
 
-  /** Takes a document off the list and keeps link discovery from adding it back (also for deleted documents). */
   drop(key: string) {
     this.docs = this.docs.filter(d => d.key !== key)
     this.dismissed.add(key)

@@ -13,7 +13,6 @@ import { docKey, isReadKey } from './ids'
 
 export interface EditorOptions {
   parent: HTMLElement
-  /** Clicks in here, around the text, place the cursor. */
   area: HTMLElement
   sync: DocSync
   images: ImageContext
@@ -84,7 +83,6 @@ function insertBlock(view: EditorView, from: number, to: number, block: string, 
   view.dispatch({ changes: { from, to, insert: lead + block }, selection: { anchor: from + lead.length + caret }, userEvent: 'input' })
 }
 
-/** A pasted URL becomes a link: around the selection, or titled with the linked document's title. */
 function pasteLink(view: EditorView, url: string, linkTitle: EditorOptions['linkTitle']) {
   const sel = view.state.selection.main
   if (!sel.empty) {
