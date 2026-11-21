@@ -125,6 +125,10 @@ body.offline #status { display: inline; }
 #editor .cm-bullet { color: var(--muted); display: inline-block; width: .8em; }
 #editor .cm-task { margin: 0 .35em 0 0; vertical-align: -.1em; cursor: pointer; accent-color: var(--accent); }
 #editor .cm-done { color: var(--muted); text-decoration: line-through; }
+#editor .cm-img-pending {
+  display: flex; align-items: center; justify-content: center; height: 120px; margin: 4px 0;
+  border: 1px dashed var(--line); border-radius: 6px; color: var(--muted); font-size: 14px;
+}
 #editor .cm-img { display: block; max-width: 100%; border-radius: 6px; margin: 4px 0; }
 #editor .cm-hr { background: linear-gradient(var(--line), var(--line)) center / 100% 1px no-repeat; }
 #editor .cm-hr-text { color: transparent; }

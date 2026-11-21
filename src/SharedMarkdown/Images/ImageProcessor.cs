@@ -42,11 +42,16 @@ public static class ImageProcessor
 
         try
         {
-            // PNG and WebP keep their format (transparency, screenshots); everything else becomes JPEG.
+            // WebP stays WebP. PNG stays PNG for screenshots and anything transparent, but a photo
+            // that arrived as PNG (browsers put copied images on the clipboard as PNG, ~10x larger
+            // than JPEG) is stored as JPEG. Photos compress badly as PNG: > 1 byte per pixel.
+            var photoAsPng = codec.EncodedFormat == SKEncodedImageFormat.Png
+                && (double)input.Length / ((long)info.Width * info.Height) > 1.0
+                && IsOpaque(bitmap);
             var (format, type, quality) = codec.EncodedFormat switch
             {
                 SKEncodedImageFormat.Webp => (SKEncodedImageFormat.Webp, "image/webp", 85),
-                SKEncodedImageFormat.Png => (SKEncodedImageFormat.Png, "image/png", 100),
+                SKEncodedImageFormat.Png when !photoAsPng => (SKEncodedImageFormat.Png, "image/png", 100),
                 _ => (SKEncodedImageFormat.Jpeg, "image/jpeg", 85),
             };
             using var image = SKImage.FromBitmap(bitmap);
@@ -55,6 +60,16 @@ public static class ImageProcessor
             return new ProcessedImage(encoded.ToArray(), type, bitmap.Width, bitmap.Height);
         }
         finally { scaled?.Dispose(); }
+    }
+
+    static bool IsOpaque(SKBitmap bitmap)
+    {
+        if (bitmap.AlphaType == SKAlphaType.Opaque) return true;
+        if (bitmap.ColorType is not (SKColorType.Rgba8888 or SKColorType.Bgra8888)) return false;
+        var pixels = bitmap.GetPixelSpan();
+        for (int i = 3; i < pixels.Length; i += 4)
+            if (pixels[i] != 255) return false;
+        return true;
     }
 
     /// Bakes the EXIF rotation into the pixels, since the EXIF data itself is dropped.

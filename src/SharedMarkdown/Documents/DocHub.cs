@@ -60,7 +60,7 @@ public partial class DocHub(DocStore store, IpGuard guard, LimitsService limits,
         finally { s.Lock.Release(); }
         await Clients.Group(id).SendAsync("presence", viewers);
         await Clients.OthersInGroup(id).SendAsync("peer"); // others re-announce their cursors
-        return new { state = JsonDocument.Parse(state).RootElement, maxChars = limits.Current.MaxDocumentChars };
+        return new { state = JsonDocument.Parse(state).RootElement, maxChars = limits.Current.MaxDocumentChars, maxImageDimension = limits.Current.MaxImageDimension };
     }
 
     /// Returns "ok", or why the batch was refused: "invalid", "size", "create" (too many new documents) or "rate".

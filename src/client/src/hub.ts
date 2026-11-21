@@ -14,7 +14,7 @@ export interface ClientEvents {
   presence: [viewers: number]
 }
 
-export interface JoinResult { state: StateRun[], maxChars: number }
+export interface JoinResult { state: StateRun[], maxChars: number, maxImageDimension: number }
 /** "ok", or why the batch was refused. */
 export type SubmitStatus = 'ok' | 'invalid' | 'size' | 'create' | 'rate'
 

@@ -100,7 +100,7 @@ app.MapGet("/api/titles", async (string ids, HttpContext ctx, DocStore store, Ip
 
 // Image decoding is CPU heavy; don't let a burst of uploads take every core.
 var imageSlots = new SemaphoreSlim(Math.Max(1, Environment.ProcessorCount / 2));
-app.MapPost("/api/blobs", async (HttpContext ctx, AppDb db, IpGuard guard, LimitsService limits) =>
+app.MapPost("/api/blobs", async (HttpContext ctx, AppDb db, IpGuard guard, LimitsService limits, ILogger<ImageUploads> log) =>
 {
     var ip = IpGuard.IpOf(ctx);
     var l = limits.Current;
@@ -122,10 +122,13 @@ app.MapPost("/api/blobs", async (HttpContext ctx, AppDb db, IpGuard guard, Limit
     if (input.Length == 0) return Results.Text("Empty upload.", statusCode: 400);
 
     ProcessedImage? image;
+    var started = System.Diagnostics.Stopwatch.GetTimestamp();
     await imageSlots.WaitAsync();
     try { image = await Task.Run(() => ImageProcessor.Process(input, l.MaxImageDimension)); }
     finally { imageSlots.Release(); }
     if (image is null) return Results.Text("This file isn't a supported image (PNG, JPEG, GIF or WebP).", statusCode: 400);
+    log.LogInformation("Image {In} bytes {InType} -> {Out} bytes {OutType} {W}x{H} in {Ms:0} ms", input.Length, ctx.Request.ContentType, image.Data.Length, image.ContentType, image.Width, image.Height,
+        System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
 
     var id = Convert.ToHexStringLower(SHA256.HashData(image.Data))[..32];
     if (!await db.Blobs.AnyAsync(b => b.Id == id))
@@ -194,6 +197,9 @@ static async Task PrepareDatabase(WebApplication app)
     await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;");
     log.LogInformation("Using database {File}", paths.Database);
 }
+
+/// Log category for image uploads.
+public class ImageUploads;
 
 public partial class Program
 {

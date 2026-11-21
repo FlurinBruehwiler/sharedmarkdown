@@ -27,6 +27,7 @@ export class DocSync {
   notice: ((message: string, ms?: number) => void) | null
   clearNotice: (() => void) | null
   maxChars: number
+  maxImageDimension = 2000
   lastCursor?: string | null
   deleted?: boolean
   joining?: boolean
@@ -139,6 +140,7 @@ export class DocSync {
     } finally { this.joining = false }
     if (id !== this.id) return
     this.maxChars = res.maxChars
+    this.maxImageDimension = res.maxImageDimension
     const local = this.editor.state.doc.toString()
     const typed = wasLoaded ? null : local // typed before the document finished loading
     const pending = [...(this.inflight || []), ...this.outbox]

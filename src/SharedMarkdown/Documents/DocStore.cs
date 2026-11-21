@@ -131,19 +131,25 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
         return result;
     }
 
-    /// First non-empty line, stripped of leading markdown syntax.
+    /// First line with text, without markdown syntax: images dropped, links reduced to their text.
+    /// Mirrors titleOf in client/src/main.ts.
     public static string TitleOf(string md)
     {
         foreach (var raw in md.AsSpan().EnumerateLines())
         {
-            var line = Regex.Replace(Regex.Replace(raw.ToString(), "&#x([0-9a-fA-F]{1,6});", m => Codepoint(Convert.ToInt32(m.Groups[1].Value, 16))), @"\\(.)", "$1").Trim().TrimStart("#>-*+ ".ToCharArray()).Trim();
+            var line = raw.ToString();
+            line = Regex.Replace(line, @"!\[[^\]]*\]\([^)]*\)", "");
+            line = Regex.Replace(line, @"\[([^\]]*)\]\([^)]*\)", "$1");
+            line = Regex.Replace(line, @"\*\*|__|~~|==|`", "");
+            line = Regex.Replace(line, @"\\(.)", "$1").Trim();
+            line = Regex.Replace(line, @"^([#>\-*+]+|\d+[.)])(\s+|$)", "");
+            line = Regex.Replace(line, @"^\[[ xX]\]\s+", "").Trim();
             if (line.Length == 0) continue;
             return line.Length > 80 ? line[..80] : line;
         }
         return "";
     }
 
-    static string Codepoint(int cp) => cp is > 0 and <= 0x10FFFF and not (>= 0xD800 and <= 0xDFFF) ? char.ConvertFromUtf32(cp) : "";
 }
 
 public class DocFlusher(DocStore store, IpGuard guard, ILogger<DocFlusher> log) : BackgroundService

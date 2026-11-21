@@ -4,7 +4,7 @@ import { history as undoHistory, defaultKeymap, historyKeymap, indentWithTab } f
 import { Language, LanguageSupport } from '@codemirror/language'
 import { markdownLanguage, insertNewlineContinueMarkup, deleteMarkupBackward } from '@codemirror/lang-markdown'
 import type { MarkdownParser } from '@lezer/markdown'
-import { livePreview, Highlight } from './livepreview'
+import { livePreview, Highlight, localImages } from './livepreview'
 import { tableEnter, tableTab, tableArrow } from './table'
 import { Hub } from './hub'
 import { DocSync } from './sync'
@@ -35,9 +35,15 @@ interface DocEntry { id: string, title: string, at: number }
 let docs = store.get<DocEntry[]>('docs', [])
 let current = '' // id of the open document ('' until the first one opens)
 
+/** First line with text, without markdown syntax: images dropped, links reduced to their text. Mirrors DocStore.TitleOf. */
 function titleOf(md: string) {
   for (const raw of md.split('\n')) {
-    const line = raw.replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16))).replace(/\\(.)/g, '$1').trim().replace(/^[#>\-*+ ]+/, '').trim()
+    const line = raw
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/\*\*|__|~~|==|`/g, '')
+      .replace(/\\(.)/g, '$1')
+      .trim().replace(/^([#>\-*+]+|\d+[.)])(\s+|$)/, '').replace(/^\[[ xX]\]\s+/, '').trim()
     if (line) return line.slice(0, 80)
   }
   return ''
@@ -155,21 +161,91 @@ function enter(view: EditorView) {
   return insertNewlineContinueMarkup(view)
 }
 
+/**
+ * Shrinks an image in the browser before uploading: scales it to the server's size limit and
+ * re-encodes photos as JPEG. Browsers put copied images on the clipboard as PNG, which for a
+ * photo is ~10x larger than the original JPEG. The server still validates and re-encodes
+ * everything; this only saves the transfer.
+ */
+async function shrinkImage(file: File, maxDimension: number): Promise<Blob> {
+  if (file.type === 'image/gif') return file // keep animations
+  let bitmap: ImageBitmap
+  try { bitmap = await createImageBitmap(file) } // applies EXIF rotation
+  catch { return file } // not decodable here; let the server decide
+  try {
+    const { width, height } = bitmap
+    const scale = Math.min(1, maxDimension / Math.max(width, height))
+    // Photos compress badly as PNG (> 1 byte per pixel); screenshots stay PNG for crisp text.
+    const photoPng = file.type === 'image/png' && file.size / (width * height) > 1
+    if (scale === 1 && !photoPng) return file
+    const w = Math.max(1, Math.round(width * scale)), h = Math.max(1, Math.round(height * scale))
+    const canvas = new OffscreenCanvas(w, h)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return file
+    ctx.imageSmoothingQuality = 'high'
+    ctx.drawImage(bitmap, 0, 0, w, h)
+    let type = file.type === 'image/jpeg' || file.type === 'image/webp' ? file.type : 'image/png'
+    if (photoPng && isOpaque(ctx, w, h)) type = 'image/jpeg'
+    const out = await canvas.convertToBlob({ type, quality: 0.85 })
+    return out.size < file.size ? out : file
+  } finally { bitmap.close() }
+}
+
+function isOpaque(ctx: OffscreenCanvasRenderingContext2D, w: number, h: number) {
+  const data = ctx.getImageData(0, 0, w, h).data
+  for (let i = 3; i < data.length; i += 4) if (data[i] !== 255) return false
+  return true
+}
+
 async function uploadImage(file: File) {
-  const r = await fetch('/api/blobs', { method: 'POST', headers: { 'content-type': file.type }, body: file })
+  const body = await shrinkImage(file, sync.maxImageDimension)
+  const r = await fetch('/api/blobs', { method: 'POST', headers: { 'content-type': body.type || file.type }, body })
   if (!r.ok) throw new Error(await r.text())
   const { url }: { url: string } = await r.json()
   return url
 }
 
+/** Replaces the markdown src `from` with `to` wherever it currently is (the text may have moved). */
+function replaceSrc(view: EditorView, from: string, to: string | null) {
+  const doc = view.state.doc.toString()
+  const changes = []
+  const re = new RegExp(String.raw`!\[[^\]]*\]\(${from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\)`, 'g')
+  for (const m of doc.matchAll(re)) {
+    const at = m.index
+    changes.push(to === null
+      ? { from: at, to: at + m[0].length }
+      : { from: at + m[0].length - from.length - 1, to: at + m[0].length - 1, insert: to })
+  }
+  if (changes.length) view.dispatch({ changes })
+}
+
+/**
+ * Pasted/dropped images appear at once: a placeholder `upload:<token>` src is inserted and shown
+ * with the local file; when the upload is done the src becomes the real `/b/<id>` URL.
+ * Other people see "Uploading image…" in the meantime.
+ */
 function insertImages(view: EditorView, files: FileList) {
   const images = Array.from(files).filter(f => f.type.startsWith('image/'))
   if (!images.length) return false
-  for (const f of images)
+  const inserts = images.map(f => {
+    const token = `upload:${Date.now()}-${randomId(6)}`
+    const preview = URL.createObjectURL(f)
+    localImages.set(token, preview)
+    const alt = (f.name || 'image').replace(/[\[\]]/g, '').replace(/\.\w+$/, '')
+    return { f, token, preview, md: `![${alt}](${token})` }
+  })
+  view.dispatch(view.state.replaceSelection(inserts.map(i => i.md).join('\n')))
+  for (const { f, token, preview } of inserts)
     uploadImage(f).then(url => {
-      const alt = (f.name || 'image').replace(/[\[\]]/g, '')
-      view.dispatch(view.state.replaceSelection(`![${alt}](${url})`))
-    }, (e: Error) => notice('Upload failed: ' + e.message, 6000))
+      localImages.set(url, preview)
+      localImages.delete(token)
+      replaceSrc(view, token, url)
+    }, (e: Error) => {
+      localImages.delete(token)
+      URL.revokeObjectURL(preview)
+      replaceSrc(view, token, null)
+      notice('Upload failed: ' + e.message, 6000)
+    })
   return true
 }
 

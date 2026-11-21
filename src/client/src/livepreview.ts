@@ -29,14 +29,33 @@ export const Highlight: MarkdownConfig = {
   }],
 }
 
+/**
+ * Images pasted in this tab, by markdown src: `upload:<token>` while uploading, then the final
+ * `/b/<id>`. They show the local copy at once and keep it after the upload, so the image never
+ * flickers or downloads again for the person who pasted it.
+ */
+export const localImages = new Map<string, string>()
+
+/** Upload tokens look like `upload:<unix ms>-<random>`; older than this, the upload is presumed dead. */
+const uploadTimeout = 2 * 60 * 1000
+
 class ImageWidget extends WidgetType {
   src: string
   alt: string
   constructor(src: string, alt: string) { super(); this.src = src; this.alt = alt }
   override eq(o: ImageWidget) { return o.src === this.src && o.alt === this.alt }
   toDOM() {
+    const local = localImages.get(this.src)
+    if (!local && this.src.startsWith('upload:')) {
+      // Someone else's image that is still uploading (or whose tab closed mid-upload).
+      const started = Number(this.src.slice(7).split('-')[0])
+      const box = document.createElement('span')
+      box.className = 'cm-img-pending'
+      box.textContent = Date.now() - started > uploadTimeout ? "Image upload didn't finish" : 'Uploading image…'
+      return box
+    }
     const img = document.createElement('img')
-    img.src = this.src
+    img.src = local ?? this.src
     img.alt = this.alt
     img.className = 'cm-img'
     return img
