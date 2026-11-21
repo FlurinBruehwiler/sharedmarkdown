@@ -2,19 +2,36 @@
 // see that file for the wire format. Each character is an item with a unique id (c = client, k = Lamport clock).
 // Inserts reference the item they go after; concurrent inserts after the same item are ordered by descending id.
 
-const gt = (a, c, k) => a.k !== k ? a.k > k : a.c > c
-const key = (c, k) => c + ':' + k
+/** Insert run: text[j] gets id (client, clock + j); the first char goes after the origin ("" = document start). */
+export type InsertOp = ['i', client: string, clock: number, originClient: string, originClock: number, text: string]
+/** Delete run: tombstones (client, clock .. clock + count - 1). */
+export type DeleteOp = ['d', client: string, clock: number, count: number]
+export type Op = InsertOp | DeleteOp
+/** Document state as runs in document order: [client, clock, text, deleted]. */
+export type StateRun = [client: string, clock: number, text: string, deleted: 0 | 1]
+/** An item id: [client, clock]. */
+export type Id = [client: string, clock: number]
+/** A text change relative to the text after the previous change. */
+export interface TextChange { from: number, to: number, insert: string }
+export interface Splice { p: number, d: number, i: string }
+
+interface Item { c: string, k: number, ch: string, del: boolean }
+
+const gt = (a: Item, c: string, k: number) => a.k !== k ? a.k > k : a.c > c
+const key = (c: string, k: number) => c + ':' + k
 
 export class Rga {
-  constructor(client) {
+  readonly client: string
+  clock = 0
+  items: Item[] = []
+  byId = new Map<string, Item>()
+  cache: string | null = ''
+
+  constructor(client: string) {
     this.client = client
-    this.clock = 0
-    this.items = []
-    this.byId = new Map()
-    this.cache = ''
   }
 
-  load(runs) {
+  load(runs: StateRun[]) {
     this.items = []
     this.byId.clear()
     for (const [c, k, text, del] of runs)
@@ -36,14 +53,14 @@ export class Rga {
     return this.cache
   }
 
-  visibleBefore(idx) {
+  visibleBefore(idx: number) {
     let n = 0
     for (let i = 0; i < idx; i++) if (!this.items[i].del) n++
     return n
   }
 
   /** Inserts one item; `hint` is the origin's index if known. Returns the new item's index, or -1 if it already existed. */
-  insertOne(c, k, origin, ch, hint = -1) {
+  insertOne(c: string, k: number, origin: string | null, ch: string, hint = -1) {
     if (this.byId.has(key(c, k))) return -1
     const items = this.items
     let idx = 0
@@ -64,10 +81,10 @@ export class Rga {
    * Integrates ops from another replica (idempotent).
    * Returns the resulting text changes, each { from, to, insert } relative to the text after the previous one.
    */
-  apply(ops) {
-    const changes = []
-    let last = null
-    const push = (from, to, insert) => {
+  apply(ops: Op[]): TextChange[] {
+    const changes: TextChange[] = []
+    let last: TextChange | null = null
+    const push = (from: number, to: number, insert: string) => {
       if (last && !last.insert && to === from + 1 && !insert && last.from === from) last.to++
       else if (last && last.to === last.from && insert && from === last.from + last.insert.length) last.insert += insert
       else changes.push(last = { from, to, insert })
@@ -75,7 +92,7 @@ export class Rga {
     for (const op of ops) {
       if (op[0] === 'i') {
         const [, c, k, oc, ok, text] = op
-        let origin = oc ? key(oc, ok) : null
+        let origin: string | null = oc ? key(oc, ok) : null
         let prevIdx = -1, prevVis = -1
         for (let j = 0; j < text.length; j++) {
           const idx = this.insertOne(c, k + j, origin, text[j], prevIdx)
@@ -102,7 +119,7 @@ export class Rga {
   }
 
   /** Id of the visible character just before text position `pos` (null at the start): a cursor anchor that survives edits. */
-  idAt(pos) {
+  idAt(pos: number): Id | null {
     if (pos <= 0) return null
     let vis = 0
     for (const it of this.items) if (!it.del && ++vis === pos) return [it.c, it.k]
@@ -110,7 +127,7 @@ export class Rga {
   }
 
   /** Current text position right after the item `c:k` (or after its closest visible predecessor if deleted). */
-  posOf(c, k) {
+  posOf(c: string, k: number) {
     if (!c) return 0
     const it = this.byId.get(key(c, k))
     if (!it) return -1
@@ -119,11 +136,12 @@ export class Rga {
   }
 
   /** Local edit: replace visible range [p, p+d) with `ins`. Applies it and returns the ops. */
-  splice(p, d, ins) {
-    const items = this.items, ops = []
-    let i = 0, vis = 0, origin = null
+  splice(p: number, d: number, ins: string): Op[] {
+    const items = this.items, ops: Op[] = []
+    let i = 0, vis = 0
+    let origin: Item | null = null
     for (; i < items.length && vis < p; i++) if (!items[i].del) { vis++; origin = items[i] }
-    let run = null
+    let run: DeleteOp | null = null
     for (let n = 0; n < d && i < items.length; i++) {
       const it = items[i]
       if (it.del) continue
@@ -134,7 +152,7 @@ export class Rga {
     }
     if (ins) {
       const k = this.clock + 1
-      const op = ['i', this.client, k, origin ? origin.c : '', origin ? origin.k : 0, ins]
+      const op: InsertOp = ['i', this.client, k, origin ? origin.c : '', origin ? origin.k : 0, ins]
       this.apply([op])
       ops.push(op)
     }
@@ -144,7 +162,7 @@ export class Rga {
 }
 
 /** Single-splice diff: common prefix and suffix. */
-export function diff(a, b) {
+export function diff(a: string, b: string): Splice {
   const n = Math.min(a.length, b.length)
   let s = 0
   while (s < n && a.charCodeAt(s) === b.charCodeAt(s)) s++

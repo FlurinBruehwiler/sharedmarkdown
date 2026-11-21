@@ -1,13 +1,17 @@
 // Bundles the frontend into ../dist: one hashed (cache-forever) JS file, CSS inlined into index.html.
 import * as esbuild from 'esbuild'
+import { execSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+
+// Type-check first: esbuild only strips types, so a type error would otherwise ship.
+try { execSync('npx tsc -p .', { stdio: 'inherit' }) } catch { process.exit(1) }
 
 const out = '../dist'
 fs.rmSync(out, { recursive: true, force: true })
 
 const result = await esbuild.build({
-  entryPoints: ['src/main.js'],
+  entryPoints: ['src/main.ts'],
   bundle: true,
   minify: true,
   format: 'esm',

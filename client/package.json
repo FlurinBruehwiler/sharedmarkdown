@@ -3,10 +3,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "check": "tsc -p .",
+    "test": "esbuild test/rga.test.ts --bundle --platform=node --format=esm --outfile=test/.out/rga.test.mjs --log-level=warning && node test/.out/rga.test.mjs"
   },
   "devDependencies": {
-    "esbuild": "0.28.2"
+    "@types/node": "^22.20.5",
+    "esbuild": "0.28.2",
+    "typescript": "^7.0.2"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

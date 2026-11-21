@@ -1,16 +1,23 @@
 import { EditorState, EditorSelection } from '@codemirror/state'
-import { EditorView, keymap, placeholder } from '@codemirror/view'
+import { EditorView, keymap, placeholder, type Command } from '@codemirror/view'
 import { history as undoHistory, defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands'
-import { LanguageSupport } from '@codemirror/language'
+import { Language, LanguageSupport } from '@codemirror/language'
 import { markdownLanguage, insertNewlineContinueMarkup, deleteMarkupBackward } from '@codemirror/lang-markdown'
-import { livePreview } from './livepreview.js'
-import { Hub } from './hub.js'
-import { DocSync } from './sync.js'
+import type { MarkdownParser } from '@lezer/markdown'
+import { livePreview, Highlight } from './livepreview'
+import { tableEnter, tableTab, tableArrow } from './table'
+import { Hub } from './hub'
+import { DocSync } from './sync'
 
-const $ = s => document.querySelector(s)
+/** An element from index.html, which always has it. */
+function $<T extends Element = HTMLElement>(sel: string): T {
+  const el = document.querySelector<T>(sel)
+  if (!el) throw new Error('missing element ' + sel)
+  return el
+}
 const ID = /^\/([A-Za-z0-9]{8,32})$/
 
-function randomId(n) {
+function randomId(n: number) {
   const abc = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
   let s = ''
   while (s.length < n) for (const b of crypto.getRandomValues(new Uint8Array(n))) if (b < 248 && s.length < n) s += abc[b % 62]
@@ -18,16 +25,17 @@ function randomId(n) {
 }
 
 const store = {
-  get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d } catch { return d } },
-  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)) } catch {} },
+  get<T>(k: string, d: T): T { try { return JSON.parse(localStorage.getItem(k) ?? 'null') ?? d } catch { return d } },
+  set(k: string, v: unknown) { try { localStorage.setItem(k, JSON.stringify(v)) } catch {} },
 }
 
 // ---------- recent documents (this browser only) ----------
 
-let docs = store.get('docs', [])  // [{ id, title, at }]
-let current = null
+interface DocEntry { id: string, title: string, at: number }
+let docs = store.get<DocEntry[]>('docs', [])
+let current = '' // id of the open document ('' until the first one opens)
 
-function titleOf(md) {
+function titleOf(md: string) {
   for (const raw of md.split('\n')) {
     const line = raw.replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16))).replace(/\\(.)/g, '$1').trim().replace(/^[#>\-*+ ]+/, '').trim()
     if (line) return line.slice(0, 80)
@@ -35,7 +43,7 @@ function titleOf(md) {
   return ''
 }
 
-function remember(id, title, touch) {
+function remember(id: string, title: string | null, touch: boolean) {
   let d = docs.find(d => d.id === id)
   if (!d) docs.push(d = { id, title: '', at: 0 })
   if (title != null) d.title = title
@@ -73,7 +81,7 @@ async function refreshTitles() {
   const ids = docs.filter(d => d.id !== current).map(d => d.id)
   if (!ids.length) return
   try {
-    const titles = await (await fetch('/api/titles?ids=' + ids.join(','))).json()
+    const titles: Record<string, string> = await (await fetch('/api/titles?ids=' + ids.join(','))).json()
     for (const d of docs) if (titles[d.id]) d.title = titles[d.id]
     store.set('docs', docs)
     renderList()
@@ -81,7 +89,7 @@ async function refreshTitles() {
 }
 
 // Linked documents show up in the sidebar, so sharing one link shares the whole web of documents.
-function discoverLinks(md) {
+function discoverLinks(md: string) {
   // Absolute links (inline or <autolink>) to this host, and relative ](/id) links.
   const re = /https?:\/\/([^/\s)>\]]+)\/([A-Za-z0-9]{8,32})(?![\w/])|\]\(\/([A-Za-z0-9]{8,32})\)/g
   let added = false
@@ -99,10 +107,10 @@ function discoverLinks(md) {
 
 const hub = new Hub(location.origin + '/hub')
 const sync = new DocSync(hub, randomId(10))
-let titleTimer
+let titleTimer: ReturnType<typeof setTimeout> | undefined
 
-function openLink(href) {
-  let u
+function openLink(href: string) {
+  let u: URL
   try { u = new URL(href, location.href) } catch { return }
   const m = u.origin === location.origin && u.pathname.match(ID)
   if (m) go(m[1])
@@ -110,7 +118,7 @@ function openLink(href) {
 }
 
 /** Wraps the selection in a markdown marker (bold/italic), or removes it if already wrapped. */
-const wrap = marker => view => {
+const wrap = (marker: string): Command => view => {
   view.dispatch(view.state.changeByRange(r => {
     const doc = view.state.doc, n = marker.length
     if (doc.sliceString(r.from - n, r.from) === marker && doc.sliceString(r.to, r.to + n) === marker)
@@ -124,7 +132,7 @@ const wrap = marker => view => {
  * Enter like Obsidian: on an empty list item / task / quote line, remove the marker
  * (or un-indent a nested item) instead of continuing; otherwise continue the markup.
  */
-function enter(view) {
+function enter(view: EditorView) {
   const { state } = view
   const sel = state.selection.main
   if (sel.empty) {
@@ -147,48 +155,60 @@ function enter(view) {
   return insertNewlineContinueMarkup(view)
 }
 
-async function uploadImage(file) {
+async function uploadImage(file: File) {
   const r = await fetch('/api/blobs', { method: 'POST', headers: { 'content-type': file.type }, body: file })
   if (!r.ok) throw new Error(await r.text())
-  return (await r.json()).url
+  const { url }: { url: string } = await r.json()
+  return url
 }
 
-function insertImages(view, files) {
+function insertImages(view: EditorView, files: FileList) {
   const images = Array.from(files).filter(f => f.type.startsWith('image/'))
   if (!images.length) return false
   for (const f of images)
     uploadImage(f).then(url => {
       const alt = (f.name || 'image').replace(/[\[\]]/g, '')
       view.dispatch(view.state.replaceSelection(`![${alt}](${url})`))
-    }, e => alert('Upload failed: ' + e.message))
+    }, (e: Error) => notice('Upload failed: ' + e.message, 6000))
   return true
 }
 
-function pasteLink(view, text) {
+function pasteLink(view: EditorView, text: string) {
   const sel = view.state.selection.main
   if (!sel.empty) {
     view.dispatch(view.state.replaceSelection(`[${view.state.sliceDoc(sel.from, sel.to)}](${text})`))
     return
   }
-  const insert = title => view.dispatch(view.state.replaceSelection(title ? `[${title.replace(/[\[\]]/g, '')}](${text})` : text))
-  let m
+  const insert = (title: string | null | undefined) => view.dispatch(view.state.replaceSelection(title ? `[${title.replace(/[\[\]]/g, '')}](${text})` : text))
+  let m: RegExpMatchArray | null | false = null
   try { const u = new URL(text); m = u.host === location.host && u.pathname.match(ID) } catch {}
   if (!m) return insert(null)
-  const known = docs.find(d => d.id === m[1])?.title
+  const id = m[1]
+  const known = docs.find(d => d.id === id)?.title
   if (known) return insert(known)
-  fetch('/api/titles?ids=' + m[1]).then(r => r.json()).then(t => insert(t[m[1]]), () => insert(null))
+  fetch('/api/titles?ids=' + id).then(r => r.json()).then((t: Record<string, string>) => insert(t[id]), () => insert(null))
 }
+
+// GFM markdown plus ==highlight==. Same language data as markdownLanguage, so its commands
+// (insertNewlineContinueMarkup checks markdownLanguage.isActiveAt) keep working.
+// lang-markdown types its language's parser as a plain lezer Parser; it is a MarkdownParser.
+const markdown = new Language(markdownLanguage.data, (markdownLanguage.parser as MarkdownParser).configure([Highlight]), [], 'markdown')
 
 const extensions = [
   sync.extension(),
-  new LanguageSupport(markdownLanguage),
+  new LanguageSupport(markdown),
   livePreview(openLink),
   undoHistory(),
   keymap.of([
-    { key: 'Enter', run: enter },
+    { key: 'Enter', run: v => tableEnter(v) || enter(v) },
+    { key: 'Tab', run: tableTab(1) },
+    { key: 'ArrowDown', run: tableArrow(true) },
+    { key: 'ArrowUp', run: tableArrow(false) },
+    { key: 'Shift-Tab', run: tableTab(-1) },
     { key: 'Backspace', run: deleteMarkupBackward },
     { key: 'Mod-b', run: wrap('**') },
     { key: 'Mod-i', run: wrap('*') },
+    { key: 'Mod-Shift-h', run: wrap('==') },
     ...defaultKeymap, ...historyKeymap, indentWithTab,
   ]),
   EditorView.lineWrapping,
@@ -229,12 +249,47 @@ function onTextChanged() {
 
 // ---------- navigation & sync ----------
 
-hub.onopen = () => sync.join()
+let noticeTimer: ReturnType<typeof setTimeout> | undefined
+function notice(message: string, ms?: number) {
+  const n = $('#notice')
+  n.textContent = message
+  n.hidden = false
+  clearTimeout(noticeTimer)
+  if (ms) noticeTimer = setTimeout(() => { n.hidden = true }, ms)
+}
+sync.notice = notice
+sync.clearNotice = () => { $('#notice').hidden = true }
+
+// After a deploy, open tabs reconnect to a server that may speak a newer protocol: reload first.
+const build = new URL($<HTMLScriptElement>('script[type=module]').src).pathname
+hub.onopen = async () => {
+  let version: string
+  try { version = await hub.invoke('Version') } catch { return }
+  if (version && version !== build && sessionStorage.getItem('reloadedFor') !== version) {
+    notice('Updating to the new version…')
+    try {
+      sessionStorage.setItem('reloadedFor', version)
+      // Unsent edits can't be trusted to the old protocol: keep the text and merge it after reloading.
+      if (sync.dirty) sessionStorage.setItem('unsaved', JSON.stringify({ id: current, text: view.state.doc.toString() }))
+    } catch {}
+    location.reload()
+    return
+  }
+  sync.join()
+}
 hub.onstatus = online => document.body.classList.toggle('offline', !online)
 hub.on('presence', n => { $('#people').textContent = n > 1 ? n + ' here' : '' })
-sync.onload = () => { if (view.state.doc.length) remember(current, null, true); onTextChanged() }
+sync.onload = () => {
+  try {
+    const saved: { id: string, text: string } | null = JSON.parse(sessionStorage.getItem('unsaved') ?? 'null')
+    sessionStorage.removeItem('unsaved')
+    if (saved?.id === current) sync.mergeText(saved.text)
+  } catch {}
+  if (view.state.doc.length) remember(current, null, true)
+  onTextChanged()
+}
 
-async function open(id) {
+async function open(id: string) {
   clearTimeout(titleTimer)
   if (current) onTextChanged() // record the outgoing document before the editor is cleared
   await sync.open(id, () => {
@@ -248,7 +303,7 @@ async function open(id) {
   })
 }
 
-function go(id) {
+function go(id: string) {
   if (id === current) return
   history.pushState(null, '', '/' + id)
   open(id)
@@ -261,18 +316,19 @@ window.addEventListener('popstate', () => {
 })
 
 $('#list').addEventListener('click', e => {
-  const a = e.target.closest('a')
+  const a = e.target instanceof Element ? e.target.closest('a') : null
   if (!a || e.ctrlKey || e.metaKey) return
   e.preventDefault()
-  go(a.getAttribute('href').slice(1))
+  go(a.getAttribute('href')!.slice(1)) // renderList gives every entry an href
 })
 $('#new').onclick = () => go(randomId(12))
 $('#menu').onclick = () => document.body.classList.toggle('nav')
 $('#scrim').onclick = () => document.body.classList.remove('nav')
-$('#copy').onclick = async e => {
+const copy = $('#copy')
+copy.onclick = async () => {
   await navigator.clipboard.writeText(location.href)
-  e.target.textContent = 'Copied'
-  setTimeout(() => e.target.textContent = 'Copy link', 1200)
+  copy.textContent = 'Copied'
+  setTimeout(() => copy.textContent = 'Copy link', 1200)
 }
 $('#theme').onclick = () => {
   const root = document.documentElement

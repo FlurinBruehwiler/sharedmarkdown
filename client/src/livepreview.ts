@@ -2,12 +2,38 @@
 // decorations, and syntax markers are hidden unless the cursor is at them. Like Obsidian:
 // headings, quotes and rules reveal their syntax for the whole line; inline elements (emphasis,
 // code, links, images) and list/task markers only while the cursor or selection touches them.
-import { Decoration, ViewPlugin, WidgetType, EditorView } from '@codemirror/view'
+import { Decoration, ViewPlugin, WidgetType, EditorView, type DecorationSet, type ViewUpdate } from '@codemirror/view'
+import type { Extension, Range } from '@codemirror/state'
 import { syntaxTree } from '@codemirror/language'
+import type { SyntaxNode } from '@lezer/common'
+import type { DelimiterType, InlineContext, MarkdownConfig } from '@lezer/markdown'
+import { tables } from './table'
+
+// `==highlight==` (markdownguide.org extended syntax), parsed like GFM strikethrough.
+const HighlightDelim: DelimiterType = { resolve: 'Highlight', mark: 'HighlightMark' }
+const Punctuation = /[\p{S}\p{P}]/u
+export const Highlight: MarkdownConfig = {
+  defineNodes: ['Highlight', 'HighlightMark'],
+  parseInline: [{
+    name: 'Highlight',
+    parse(cx: InlineContext, next: number, pos: number) {
+      if (next !== 61 /* = */ || cx.char(pos + 1) !== 61 || cx.char(pos + 2) === 61 || cx.char(pos - 1) === 61) return -1
+      const before = cx.slice(pos - 1, pos), after = cx.slice(pos + 2, pos + 3)
+      const sBefore = /\s|^$/.test(before), sAfter = /\s|^$/.test(after)
+      const pBefore = Punctuation.test(before), pAfter = Punctuation.test(after)
+      return cx.addDelimiter(HighlightDelim, pos, pos + 2,
+        !sAfter && (!pAfter || sBefore || pBefore),
+        !sBefore && (!pBefore || sAfter || pAfter))
+    },
+    after: 'Emphasis',
+  }],
+}
 
 class ImageWidget extends WidgetType {
-  constructor(src, alt) { super(); this.src = src; this.alt = alt }
-  eq(o) { return o.src === this.src && o.alt === this.alt }
+  src: string
+  alt: string
+  constructor(src: string, alt: string) { super(); this.src = src; this.alt = alt }
+  override eq(o: ImageWidget) { return o.src === this.src && o.alt === this.alt }
   toDOM() {
     const img = document.createElement('img')
     img.src = this.src
@@ -18,8 +44,10 @@ class ImageWidget extends WidgetType {
 }
 
 class TextWidget extends WidgetType {
-  constructor(text, cls) { super(); this.text = text; this.cls = cls }
-  eq(o) { return o.text === this.text && o.cls === this.cls }
+  text: string
+  cls: string
+  constructor(text: string, cls: string) { super(); this.text = text; this.cls = cls }
+  override eq(o: TextWidget) { return o.text === this.text && o.cls === this.cls }
   toDOM() {
     const s = document.createElement('span')
     s.className = this.cls
@@ -28,10 +56,37 @@ class TextWidget extends WidgetType {
   }
 }
 
+class CopyWidget extends WidgetType {
+  override eq() { return true }
+  toDOM(view: EditorView) {
+    const b = document.createElement('button')
+    b.className = 'cm-cb-copy'
+    b.type = 'button'
+    b.tabIndex = -1
+    b.textContent = 'Copy'
+    b.onmousedown = e => {
+      e.preventDefault()
+      e.stopPropagation()
+      // The code block this button belongs to, read from the source at click time.
+      let node: SyntaxNode | null = syntaxTree(view.state).resolveInner(view.posAtDOM(b), -1)
+      while (node && node.name !== 'FencedCode') node = node.parent
+      const text = node?.getChild('CodeText')
+      if (!text) return
+      navigator.clipboard?.writeText(view.state.doc.sliceString(text.from, text.to)).then(() => {
+        b.textContent = 'Copied'
+        setTimeout(() => { b.textContent = 'Copy' }, 1200)
+      }, () => {})
+    }
+    return b
+  }
+  override ignoreEvent() { return true }
+}
+
 class CheckboxWidget extends WidgetType {
-  constructor(checked) { super(); this.checked = checked }
-  eq(o) { return o.checked === this.checked }
-  toDOM(view) {
+  checked: boolean
+  constructor(checked: boolean) { super(); this.checked = checked }
+  override eq(o: CheckboxWidget) { return o.checked === this.checked }
+  toDOM(view: EditorView) {
     const box = document.createElement('input')
     box.type = 'checkbox'
     box.checked = this.checked
@@ -47,32 +102,32 @@ class CheckboxWidget extends WidgetType {
     }
     return box
   }
-  ignoreEvent() { return false }
+  override ignoreEvent() { return false }
 }
 
 const hidden = Decoration.replace({})
-const line = cls => Decoration.line({ class: cls })
-const mark = cls => Decoration.mark({ class: cls })
+const line = (cls: string) => Decoration.line({ class: cls })
+const mark = (cls: string) => Decoration.mark({ class: cls })
 
-function build(view) {
+function build(view: EditorView): DecorationSet {
   const { state } = view
   const doc = state.doc
-  const decos = []
-  const activeLines = new Set()
+  const decos: Range<Decoration>[] = []
+  const activeLines = new Set<number>()
   if (view.hasFocus)
     for (const r of state.selection.ranges)
       for (let l = doc.lineAt(r.from).number; l <= doc.lineAt(r.to).number; l++) activeLines.add(l)
-  const active = (from, to = from) => {
+  const active = (from: number, to = from) => {
     for (let l = doc.lineAt(from).number, end = doc.lineAt(to).number; l <= end; l++) if (activeLines.has(l)) return true
     return false
   }
   // Selection touching [from, to], boundaries included (cursor right after `*foo*` still reveals it).
-  const touches = (from, to) => view.hasFocus && state.selection.ranges.some(r => r.from <= to && r.to >= from)
-  const lines = (from, to, cls) => {
+  const touches = (from: number, to: number) => view.hasFocus && state.selection.ranges.some(r => r.from <= to && r.to >= from)
+  const lines = (from: number, to: number, cls: string) => {
     for (let l = doc.lineAt(from).number, end = doc.lineAt(to).number; l <= end; l++) decos.push(line(cls).range(doc.line(l).from))
   }
   // Hide a marker plus the single space that follows it (e.g. "## ", "> ").
-  const hideWithSpace = (from, to) => decos.push(hidden.range(from, doc.sliceString(to, to + 1) === ' ' ? to + 1 : to))
+  const hideWithSpace = (from: number, to: number) => decos.push(hidden.range(from, doc.sliceString(to, to + 1) === ' ' ? to + 1 : to))
 
   for (const { from, to } of view.visibleRanges) {
     syntaxTree(state).iterate({
@@ -90,11 +145,13 @@ function build(view) {
           case 'Emphasis': decos.push(mark('cm-em').range(n.from, n.to)); break
           case 'StrongEmphasis': decos.push(mark('cm-strong').range(n.from, n.to)); break
           case 'Strikethrough': decos.push(mark('cm-strike').range(n.from, n.to)); break
+          case 'Highlight': decos.push(mark('cm-mark').range(n.from, n.to)); break
           case 'InlineCode': decos.push(mark('cm-code').range(n.from, n.to)); break
           case 'EmphasisMark':
-          case 'StrikethroughMark': {
+          case 'StrikethroughMark':
+          case 'HighlightMark': {
             const p = n.node.parent
-            decos.push((touches(p.from, p.to) ? mark('cm-meta') : hidden).range(n.from, n.to))
+            if (p) decos.push((touches(p.from, p.to) ? mark('cm-meta') : hidden).range(n.from, n.to))
             break
           }
           case 'CodeMark': {
@@ -102,17 +159,55 @@ function build(view) {
             if (p?.name === 'InlineCode') decos.push((touches(p.from, p.to) ? mark('cm-meta') : hidden).range(n.from, n.to))
             break
           }
-          case 'FencedCode':
+          case 'FencedCode': {
+            // One rounded box. Outside the block the fences lose their backticks (the opening one
+            // keeps a small language label), inside it they show raw; each line keeps its height.
+            const first = doc.lineAt(n.from), last = doc.lineAt(n.to)
+            const marks = n.node.getChildren('CodeMark')
+            const closed = marks.length > 1 && last.number > first.number && marks[marks.length - 1].from >= last.from
+            const editing = active(n.from, n.to)
+            for (let l = first.number; l <= last.number; l++) {
+              let cls = 'cm-codeblock'
+              if (l === first.number) cls += ' cm-cb-first cm-fence'
+              if (l === last.number) cls += ' cm-cb-last'
+              if (l === last.number && closed) cls += ' cm-fence'
+              decos.push(line(cls).range(doc.line(l).from))
+            }
+            const info = n.node.getChild('CodeInfo')
+            if (editing) {
+              if (info) decos.push(mark('cm-meta').range(info.from, info.to))
+            } else {
+              const open = marks[0]
+              if (open) decos.push(hidden.range(open.from, open.to))
+              if (info) {
+                const lang = doc.sliceString(info.from, info.to).split(/\s/)[0]
+                decos.push(mark('cm-cb-lang').range(info.from, info.from + lang.length))
+                if (info.to > info.from + lang.length) decos.push(hidden.range(info.from + lang.length, info.to))
+              }
+              if (marks[0]) decos.push(Decoration.widget({ widget: new CopyWidget(), side: 1 }).range(first.to))
+              if (closed) decos.push(hidden.range(marks[marks.length - 1].from, last.to))
+            }
+            return false
+          }
           case 'CodeBlock': {
-            lines(n.from, n.to, 'cm-codeblock')
-            decos.push(line('cm-codeblock cm-fence').range(doc.lineAt(n.from).from))
-            if (name === 'FencedCode' && doc.lineAt(n.to).number > doc.lineAt(n.from).number)
-              decos.push(line('cm-codeblock cm-fence').range(doc.lineAt(n.to).from))
+            const first = doc.lineAt(n.from).number, last = doc.lineAt(n.to).number
+            for (let l = first; l <= last; l++)
+              decos.push(line('cm-codeblock' + (l === first ? ' cm-cb-first' : '') + (l === last ? ' cm-cb-last' : '')).range(doc.line(l).from))
             return false
           }
           case 'Blockquote': lines(n.from, n.to, 'cm-quote'); break
           case 'QuoteMark': if (!active(n.from)) hideWithSpace(n.from, n.to); break
-          case 'Table': lines(n.from, n.to, 'cm-table'); return false
+          case 'Table':
+            // Source view of a table (the rendered one is a block widget from table.ts).
+            lines(n.from, n.to, 'cm-table')
+            break
+          case 'TableHeader':
+          case 'TableRow':
+            // Raw while editing: dim the pipes, bold the header, no hidden markers (keeps columns aligned).
+            if (name === 'TableHeader') decos.push(mark('cm-strong').range(n.from, n.to))
+            for (const d of n.node.getChildren('TableDelimiter')) decos.push(mark('cm-meta').range(d.from, d.to))
+            return false
+          case 'TableDelimiter': decos.push(mark('cm-meta').range(n.from, n.to)); break
           case 'HorizontalRule':
             // Keep the text (just invisible) and draw the rule in the same line, so the height never changes.
             if (!active(n.from)) {
@@ -124,7 +219,7 @@ function build(view) {
             const item = n.node.parent
             const task = item?.getChild('Task')
             const marker = task?.getChild('TaskMarker')
-            if (marker) {
+            if (task && marker) {
               const checked = /x/i.test(doc.sliceString(marker.from, marker.to))
               if (checked) decos.push(mark('cm-done').range(marker.to, task.to))
               if (!touches(n.from, marker.to)) decos.push(Decoration.replace({ widget: new CheckboxWidget(checked) }).range(n.from, marker.to))
@@ -185,21 +280,23 @@ function build(view) {
   return Decoration.set(decos, true)
 }
 
-export function livePreview(openLink) {
+export function livePreview(openLink: (href: string) => void): Extension {
   return [
+    tables(openLink),
     ViewPlugin.fromClass(class {
-      constructor(view) { this.decorations = build(view) }
-      update(u) {
+      decorations: DecorationSet
+      constructor(view: EditorView) { this.decorations = build(view) }
+      update(u: ViewUpdate) {
         if (u.docChanged || u.viewportChanged || u.selectionSet || u.focusChanged || syntaxTree(u.startState) !== syntaxTree(u.state))
           this.decorations = build(u.view)
       }
     }, { decorations: v => v.decorations }),
     EditorView.domEventHandlers({
       mousedown(e) {
-        const a = e.target.closest?.('.cm-live[data-href]')
+        const a = e.target instanceof Element ? e.target.closest<HTMLElement>('.cm-live[data-href]') : null
         if (!a || e.button !== 0) return false
         e.preventDefault()
-        openLink(a.dataset.href)
+        openLink(a.dataset.href!) // the selector requires data-href
         return true
       },
     }),
