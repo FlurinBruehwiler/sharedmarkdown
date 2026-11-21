@@ -5,12 +5,29 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using SharedMarkdown;
 using SharedMarkdown.Admin;
+using Serilog;
+using Serilog.Events;
 
 var builder = WebApplication.CreateBuilder(args);
 
 var paths = new Paths(Path.GetFullPath(builder.Configuration["DataDir"] ?? Path.Combine(builder.Environment.ContentRootPath, "data")));
 Directory.CreateDirectory(paths.DataDir);
 builder.Services.AddSingleton(paths);
+var logFiles = new LogFiles(paths);
+builder.Services.AddSingleton(logFiles);
+builder.Services.AddSerilog(log =>
+{
+    // Serilog replaces the logger factory, so the usual Logging:LogLevel filters are applied here.
+    foreach (var level in builder.Configuration.GetSection("Logging:LogLevel").GetChildren())
+        if (Enum.TryParse<LogEventLevel>(level.Value switch { "Trace" => "Verbose", "Critical" => "Fatal", var v => v }, out var min))
+        {
+            if (level.Key == "Default") log.MinimumLevel.Is(min);
+            else log.MinimumLevel.Override(level.Key, min);
+        }
+    log.WriteTo.Console(outputTemplate: "{Level:u3} {SourceContext}: {Message:lj}{NewLine}{Exception}")
+       .WriteTo.File(Path.Combine(logFiles.Dir, LogFiles.FilePattern), outputTemplate: LogFiles.Template,
+           rollingInterval: RollingInterval.Day, retainedFileCountLimit: 30, fileSizeLimitBytes: 20_000_000, rollOnFileSizeLimit: true);
+});
 builder.Services.AddDbContextFactory<AppDb>(o => o.UseSqlite(paths.ConnectionString));
 builder.Services.AddSingleton<DocStore>();
 builder.Services.AddHostedService<DocFlusher>();

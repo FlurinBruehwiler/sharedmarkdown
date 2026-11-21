@@ -42,7 +42,7 @@ All limits are per client IP (IPv6 grouped by /64), have defaults in `src/Shared
 
 Uploaded images are decoded and re-encoded with SkiaSharp: this validates them, applies the EXIF rotation and drops all metadata (GPS position etc.). GIFs are kept as uploaded (Skia can't encode GIF; they carry no EXIF).
 
-The admin dashboard shows usage, lists documents and images (searchable, filterable by IP, deletable one by one or per IP), blocks IPs, edits limits and makes/downloads backups. Deleted documents stay deleted: their ids are remembered (`DeletedDocuments`), so an offline copy reconnecting later can't bring them back.
+The admin dashboard shows usage, lists documents and images (searchable, filterable by IP, deletable one by one or per IP), blocks IPs, edits limits and makes/downloads backups and has a log explorer (day, level, search; Serilog writes `logs/sharedmarkdown-{date}.log`, 30 days kept, and the same lines go to the journal). Deleted documents stay deleted: their ids are remembered (`DeletedDocuments`), so an offline copy reconnecting later can't bring them back.
 
 ## Security notes
 
@@ -79,4 +79,4 @@ One-time server setup:
 5. GitHub secret `DEPLOY_SSH_PRIVATE_KEY`, and passwordless sudo for `systemctl restart sharedmarkdown`.
 6. Copy `/opt/sharedmarkdown/data/backups` off the server regularly (daily backups are kept 14 days on the same disk).
 
-Data folder: `sharedmarkdown.db` (documents, images, settings), `backups/`, `keys/` (login cookie keys; keep them, or the admin is logged out).
+Data folder: `sharedmarkdown.db` (documents, images, settings), `backups/`, `logs/`, `keys/` (login cookie keys; keep them, or the admin is logged out).

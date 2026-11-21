@@ -14,5 +14,7 @@ static class Fmt
 
     public static string Time(DateTime utc) => TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), Zurich).ToString("dd.MM.yyyy HH:mm");
 
+    public static string Clock(DateTimeOffset t) => TimeZoneInfo.ConvertTime(t, Zurich).ToString("HH:mm:ss");
+
     public static string Title(string t) => string.IsNullOrWhiteSpace(t) ? "Untitled" : t;
 }

@@ -1,0 +1,134 @@
+@page "/admin/logs"
+@attribute [Authorize]
+@inject LogFiles LogFiles
+
+<h2>Logs</h2>
+<p class="muted">
+    One file per day in <code>@LogFiles.Dir</code>, the last 30 days kept. The same lines go to the systemd journal
+    (<code>journalctl -u sharedmarkdown</code>).
+</p>
+
+<div class="row">
+    <select @bind="_file" @bind:after="Load" aria-label="Day">
+        @foreach (var f in _files)
+        {
+            <option value="@f.Name">@DayOf(f) (@Fmt.Bytes(f.Size))</option>
+        }
+    </select>
+    <select @bind="_level" @bind:after="Filter" aria-label="Minimum level">
+        <option value="@LogLevel.Information">All</option>
+        <option value="@LogLevel.Warning">Warnings and errors</option>
+        <option value="@LogLevel.Error">Errors only</option>
+    </select>
+    <input type="search" placeholder="Search messages, categories, stack traces" @bind="_query" @bind:event="oninput" @bind:after="Filter" class="search" />
+    <button @onclick="Load">Refresh</button>
+    @if (_current is not null)
+    {
+        <a href="/admin/logs/@Uri.EscapeDataString(_current.Name)" download>Download</a>
+    }
+</div>
+
+@if (_files.Count == 0)
+{
+    <p class="muted">No log files yet.</p>
+}
+else
+{
+    <p class="muted counts">
+        @_shown.Count of @_entries.Count entries, newest first
+        @if (_warnings > 0) { <span> · <span class="lvl wrn">@Count(_warnings, "warning")</span></span> }
+        @if (_errors > 0) { <span> · <span class="lvl err">@Count(_errors, "error")</span></span> }
+        @if (_shown.Count > Max) { <span> · showing the newest @Max</span> }
+    </p>
+    <div class="log">
+        @foreach (var e in _shown.Take(Max))
+        {
+            <div class="entry @Css(e.Level)">
+                <time title="@e.Time.ToString("yyyy-MM-dd HH:mm:ss.fff zzz")">@Fmt.Clock(e.Time)</time>
+                <span class="lvl @Css(e.Level)">@Label(e.Level)</span>
+                <span class="cat" title="@e.Category">@Short(e.Category)</span>
+                @if (e.Detail is null)
+                {
+                    <span class="msg">@e.Message</span>
+                }
+                else
+                {
+                    <details class="msg">
+                        <summary>@e.Message</summary>
+                        <pre>@e.Detail</pre>
+                    </details>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    const int Max = 1000;
+
+    List<LogFiles.LogFile> _files = [];
+    LogFiles.LogFile? _current;
+    List<LogFiles.Entry> _entries = [];
+    List<LogFiles.Entry> _shown = [];
+    string? _file;
+    LogLevel _level = LogLevel.Information;
+    string _query = "";
+    int _warnings, _errors;
+
+    protected override void OnInitialized()
+    {
+        _files = LogFiles.List();
+        _file = _files.FirstOrDefault()?.Name;
+        Load();
+    }
+
+    void Load()
+    {
+        _files = LogFiles.List();
+        _current = _file is null ? null : LogFiles.Find(_file);
+        _entries = _current is null ? [] : LogFiles.Read(_current);
+        _warnings = _entries.Count(e => e.Level == LogLevel.Warning);
+        _errors = _entries.Count(e => e.Level >= LogLevel.Error);
+        Filter();
+    }
+
+    void Filter()
+    {
+        var q = _query.Trim();
+        _shown = _entries
+            .Where(e => e.Level >= _level)
+            .Where(e => q.Length == 0
+                        || e.Message.Contains(q, StringComparison.OrdinalIgnoreCase)
+                        || e.Category.Contains(q, StringComparison.OrdinalIgnoreCase)
+                        || (e.Detail?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false))
+            .Reverse()
+            .ToList();
+    }
+
+    static string DayOf(LogFiles.LogFile f)
+    {
+        var d = f.Name["sharedmarkdown-".Length..];
+        var part = d.Length > 12 ? " part " + int.Parse(d[9..12]) : "";
+        return $"{d[6..8]}.{d[4..6]}.{d[..4]}{part}";
+    }
+
+    static string Count(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
+
+    static string Short(string category) => category[(category.LastIndexOf('.') + 1)..];
+
+    static string Css(LogLevel l) => l switch
+    {
+        >= LogLevel.Error => "err",
+        LogLevel.Warning => "wrn",
+        _ => "inf",
+    };
+
+    static string Label(LogLevel l) => l switch
+    {
+        LogLevel.Critical => "Fatal",
+        LogLevel.Error => "Error",
+        LogLevel.Warning => "Warn",
+        LogLevel.Information => "Info",
+        _ => "Debug",
+    };
+}

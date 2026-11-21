@@ -11,6 +11,10 @@ public static class AdminEndpoints
             maintenance.FindBackup(name) is { } b ? Results.File(b.Path, "application/vnd.sqlite3", b.Name) : Results.NotFound())
             .RequireAuthorization();
 
+        app.MapGet("/admin/logs/{name}", (string name, LogFiles logs) =>
+            logs.Find(name) is { } f ? Results.Stream(LogFiles.OpenShared(f.Path), "text/plain; charset=utf-8", f.Name) : Results.NotFound())
+            .RequireAuthorization();
+
         app.MapPost("/admin/logout", async (HttpContext ctx) =>
         {
             await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
