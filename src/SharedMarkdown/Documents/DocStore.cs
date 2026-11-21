@@ -125,8 +125,10 @@ public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILog
         {
             using var scope = scopes.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDb>();
-            foreach (var d in await db.Documents.Where(d => missing.Contains(d.Id)).Select(d => new { d.Id, d.Title }).ToListAsync())
-                result[d.Id] = d.Title;
+            // Computed from the text rather than the stored Title, so documents saved before a change to
+            // TitleOf get the current rules too. The title is in the first lines; 4000 chars is plenty.
+            foreach (var d in await db.Documents.Where(d => missing.Contains(d.Id)).Select(d => new { d.Id, Head = d.Content.Substring(0, 4000) }).ToListAsync())
+                result[d.Id] = TitleOf(d.Head);
         }
         return result;
     }
