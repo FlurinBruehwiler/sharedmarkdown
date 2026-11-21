@@ -66,6 +66,7 @@ header {
 }
 #status::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #d97706; margin-right: 7px; vertical-align: 1px; }
 body.offline #status, body.syncing #status { display: inline-block; }
+header > :not(#status) { flex-shrink: 0; } /* the status gives way first */
 body.syncing #status { color: var(--muted); background: var(--hover); }
 body.syncing #status::before { background: var(--accent); }
 :root[data-theme="dark"] #status { color: #fbbf24; background: #f59e0b1f; }

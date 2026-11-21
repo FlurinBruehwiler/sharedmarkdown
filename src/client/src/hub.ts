@@ -75,6 +75,8 @@ export class Hub {
       this.delay = 0
       this.connect()
     })
+    // The OS says the network is gone: don't wait for the keep-alive timeout (35 s) to notice.
+    addEventListener('offline', () => { if (this.connected) this.ws.close() })
   }
 
   /** Closes the connection for good (no reconnect). */
