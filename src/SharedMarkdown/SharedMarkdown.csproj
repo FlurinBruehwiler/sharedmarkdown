@@ -26,7 +26,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ClientSource Include="$(ClientDir)/src/**;$(ClientDir)/index.html;$(ClientDir)/build.mjs;$(ClientDir)/package.json;$(ClientDir)/tsconfig.json" />
+    <ClientSource Include="$(ClientDir)/src/**;$(ClientDir)/public/**;$(ClientDir)/index.html;$(ClientDir)/build.mjs;$(ClientDir)/package.json;$(ClientDir)/tsconfig.json" />
     <None Update="app.html" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
@@ -43,8 +43,10 @@
   </Target>
   <Target Name="IncludeClientOutput" AfterTargets="BuildClient">
     <ItemGroup>
-      <Content Remove="wwwroot/assets/app.js;wwwroot/sw.js" />
-      <Content Include="wwwroot/assets/app.js;wwwroot/sw.js" />
+      <ClientPublic Include="$(ClientDir)/public/**" />
+      <ClientOutput Include="wwwroot/assets/app.js;wwwroot/sw.js;@(ClientPublic->'wwwroot/%(RecursiveDir)%(Filename)%(Extension)')" />
+      <Content Remove="@(ClientOutput)" />
+      <Content Include="@(ClientOutput)" />
       <None Remove="app.html" />
       <None Include="app.html" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     </ItemGroup>

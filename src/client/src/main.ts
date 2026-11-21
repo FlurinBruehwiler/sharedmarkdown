@@ -49,9 +49,13 @@ const view = editor.view
 // Automated tests (?debug) drive the editor through this, even in a background tab.
 if (new URLSearchParams(location.search).has('debug')) Object.assign(window, { cmView: view, smHub: hub, smSync: sync })
 
+// The page's own title (index.html) stays while a document is empty: it is what search engines see for "/".
+const siteTitle = document.title
+
 function textChanged() {
   const md = view.state.doc.toString()
-  document.title = (titleOf(md) || 'Untitled') + ' · SharedMarkdown'
+  const title = titleOf(md)
+  document.title = title ? title + ' · SharedMarkdown' : siteTitle
   sidebar.textChanged(sync.key, md)
 }
 
@@ -72,7 +76,7 @@ async function open(key: string) {
     editor.reset(key)
     document.body.classList.toggle('readonly', isReadKey(key))
     setShareMenu(false, false)
-    document.title = 'SharedMarkdown'
+    document.title = siteTitle
     $('#people').textContent = ''
     document.body.classList.remove('nav')
     sidebar.render()

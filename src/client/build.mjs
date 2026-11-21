@@ -2,6 +2,7 @@
 // - wwwroot/assets/app.js   the bundle; ASP.NET's MapStaticAssets fingerprints, compresses and caches it
 // - wwwroot/sw.js           the service worker, at the site root (its scope), never fingerprinted
 // - app.html                the page, with the CSS inlined; served by AppShell.cs for every document URL
+// - wwwroot/*               public/: robots.txt, sitemap.xml, icons and the link preview image
 import * as esbuild from 'esbuild'
 import { execSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -12,6 +13,7 @@ try { execSync('npx tsc -p .', { stdio: 'inherit' }) } catch { process.exit(1) }
 
 const server = '../SharedMarkdown'
 fs.mkdirSync(server + '/wwwroot/assets', { recursive: true })
+fs.cpSync('public', server + '/wwwroot', { recursive: true })
 
 const app = server + '/wwwroot/assets/app.js'
 await esbuild.build({
@@ -26,6 +28,7 @@ await esbuild.build({
 
 const css = (await esbuild.transform(fs.readFileSync('src/style.css', 'utf8'), { loader: 'css', minify: true })).code.trim()
 const html = fs.readFileSync('index.html', 'utf8')
+  .replace(/<!--.*?-->/gs, '')
   .replace(/>\s+</g, '><')
   .replace('/*CSS*/', () => css)
 fs.writeFileSync(server + '/app.html', html)
