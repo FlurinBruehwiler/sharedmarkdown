@@ -1,6 +1,7 @@
 import { Annotation, ChangeSet, EditorState, StateEffect, Transaction, type Extension, type Range } from '@codemirror/state'
 import { Decoration, ViewPlugin, WidgetType, type DecorationSet, type EditorView, type ViewUpdate } from '@codemirror/view'
-import { Rga, applyAll, compactOps, diff, firstBatch, type Id, type Op, type TextChange } from './rga'
+import { Rga, applyAll, compactOps, firstBatch, type Id, type Op, type TextChange } from './rga'
+import { diff } from './text'
 import { FORMAT, LocalDocs, type DocRecord } from './local'
 import type { Hub, JoinResult, SubmitStatus } from './hub'
 

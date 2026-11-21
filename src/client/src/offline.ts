@@ -3,7 +3,8 @@
 // for documents that aren't open anywhere.
 import { Hub } from './hub'
 import { FORMAT } from './local'
-import { Rga, applyAll, compactOps, diff, firstBatch, type Op } from './rga'
+import { Rga, applyAll, compactOps, firstBatch, type Op } from './rga'
+import { diff } from './text'
 import type { DocSync } from './sync'
 
 export function setupOffline(hub: Hub, sync: DocSync) {

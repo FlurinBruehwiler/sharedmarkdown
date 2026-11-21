@@ -5,7 +5,7 @@
   "scripts": {
     "build": "node build.mjs",
     "check": "tsc -p .",
-    "test": "esbuild test/rga.test.ts --bundle --platform=node --format=esm --outfile=test/.out/rga.test.mjs --log-level=warning && node test/.out/rga.test.mjs"
+    "test": "node test/run.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

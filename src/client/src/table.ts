@@ -7,7 +7,7 @@ import { Decoration, EditorView, WidgetType, type Command, type DecorationSet } 
 import { syntaxTree } from '@codemirror/language'
 import { undo, redo, isolateHistory } from '@codemirror/commands'
 import type { SyntaxNode } from '@lezer/common'
-import { diff } from './rga'
+import { diff } from './text'
 
 type LinkHandler = (href: string) => void
 let openLink: LinkHandler = () => {}
