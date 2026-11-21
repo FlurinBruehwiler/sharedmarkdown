@@ -5,8 +5,18 @@
 @inject IpGuard Guard
 @inject Paths Paths
 @inject Maintenance Maintenance
+@inject ServerMetrics Metrics
+@implements IDisposable
 
 <h2>Overview</h2>
+
+@{ var history = Metrics.History(); }
+<div class="cards">
+    @Rate("HTTP requests/s", "Page loads, images, API calls", history, h => h.RequestsPerSecond)
+    @Rate("SignalR in/s", "Hub calls from browsers: edits, cursor moves, joins", history, h => h.HubInPerSecond)
+    @Rate("SignalR out/s", "Messages sent to browsers: relayed edits, cursors, presence (one per recipient)", history, h => h.HubOutPerSecond)
+</div>
+<p class="muted">Averaged over 10 s; the lines show the last hour. Refreshes every 10 s.</p>
 
 @if (_s is { } s)
 {
@@ -38,6 +48,26 @@ else
     record Stats(int Documents, int Documents24h, long TextBytes, int Images, int Images24h, long ImageBytes, long DbBytes, int Blocked, DateTime? LastBackup,
         List<(string Ip, int Count)> TopCreators, List<(string Ip, int Count)> TopUploaders);
     Stats? _s;
+    Timer? _timer;
+
+    protected override void OnInitialized() =>
+        _timer = new Timer(_ => InvokeAsync(StateHasChanged), null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
+
+    public void Dispose() => _timer?.Dispose();
+
+    static RenderFragment Rate(string label, string explanation, List<MetricSample> history, Func<MetricSample, double> pick) => __builder =>
+    {
+        var values = history.Select(pick).ToList();
+        var peak = values.DefaultIfEmpty().Max();
+        <div class="card" title="@explanation">
+            <span>@label</span>
+            <b>@PerSecond(values.LastOrDefault())</b>
+            <span>peak @PerSecond(peak) in the last hour</span>
+            <Sparkline Values="values" Times="history.Select(h => h.Time).ToList()" Max="Math.Max(peak, 1)" Format="PerSecond" />
+        </div>
+    };
+
+    static string PerSecond(double v) => v < 10 ? v.ToString("0.#") : v.ToString("N0");
 
     protected override async Task OnInitializedAsync()
     {

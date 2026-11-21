@@ -2,6 +2,7 @@ using System.Net;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using SharedMarkdown;
 using SharedMarkdown.Admin;
@@ -41,7 +42,12 @@ builder.Services.AddSingleton<Maintenance>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<Maintenance>());
 builder.Services.AddSingleton<ServerMetrics>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ServerMetrics>());
-builder.Services.AddSignalR(o => o.MaximumReceiveMessageSize = 512 * 1024);
+builder.Services.AddSingleton<Traffic>();
+builder.Services.AddSignalR(o =>
+{
+    o.MaximumReceiveMessageSize = 512 * 1024;
+    o.AddFilter<TrafficHubFilter>();
+});
 
 // Without this every visitor behind the reverse proxy would share its IP, and so one set of rate limits.
 builder.Services.Configure<ForwardedHeadersOptions>(o =>
@@ -75,6 +81,8 @@ await app.Services.GetRequiredService<LimitsService>().Load();
 await app.Services.GetRequiredService<IpGuard>().LoadBlocked();
 await app.Services.GetRequiredService<DocStore>().LoadDeleted();
 
+var traffic = app.Services.GetRequiredService<Traffic>();
+app.Use((ctx, next) => { traffic.Request(); return next(ctx); });
 app.UseForwardedHeaders();
 if (!app.Environment.IsDevelopment()) app.UseHsts();
 app.UseSecurityHeaders();

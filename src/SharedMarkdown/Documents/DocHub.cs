@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.SignalR;
 
 namespace SharedMarkdown;
 
-public class DocHub(DocStore store, IpGuard guard, LimitsService limits, AppShell shell, ILogger<DocHub> log) : Hub
+public class DocHub(DocStore store, IpGuard guard, LimitsService limits, AppShell shell, Traffic traffic, ILogger<DocHub> log) : Hub
 {
     public const int CursorsPerSecond = 20;
 
@@ -101,6 +101,7 @@ public class DocHub(DocStore store, IpGuard guard, LimitsService limits, AppShel
             finally { s.Lock.Release(); }
             await Clients.Group(id).SendAsync("presence", viewers);
             await Clients.OthersInGroup(id).SendAsync("peer");
+            traffic.HubOut(2 * viewers - 1);
             using var json = JsonDocument.Parse(state);
             var l = limits.Current;
             return new JoinResult(json.RootElement.Clone(), l.MaxDocumentChars, l.MaxImageDimension);
@@ -130,6 +131,7 @@ public class DocHub(DocStore store, IpGuard guard, LimitsService limits, AppShel
             s.Touch();
             // Under the lock, so every client receives ops in the order the server applied them.
             await Clients.OthersInGroup(id).SendAsync("ops", ops);
+            traffic.HubOut(s.Viewers - 1);
             return SubmitStatus.Ok;
         }
         finally { s.Lock.Release(); }
@@ -143,6 +145,7 @@ public class DocHub(DocStore store, IpGuard guard, LimitsService limits, AppShel
         if (now - c.CursorWindow >= 1000) { c.CursorWindow = now; c.Cursors = 0; }
         if (++c.Cursors > CursorsPerSecond) return;
         await Clients.OthersInGroup(s.Id).SendAsync("cursor", c.Peer, client, clock);
+        traffic.HubOut(s.Viewers - 1);
     }
 
     public override async Task OnDisconnectedAsync(Exception? e)
@@ -162,5 +165,6 @@ public class DocHub(DocStore store, IpGuard guard, LimitsService limits, AppShel
         try { viewers = --s.Viewers; } finally { s.Lock.Release(); }
         s.Touch();
         await Clients.Group(s.Id).SendAsync("presence", viewers);
+        traffic.HubOut((C.ReadOnly ? 1 : 2) * viewers);
     }
 }

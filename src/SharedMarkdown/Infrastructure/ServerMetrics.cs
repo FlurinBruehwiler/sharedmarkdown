@@ -2,7 +2,8 @@ using System.Diagnostics;
 
 namespace SharedMarkdown;
 
-public record MetricSample(DateTime Time, double CpuPercent, double MemoryPercent, double Load1, long AppMemoryBytes);
+public record MetricSample(DateTime Time, double CpuPercent, double MemoryPercent, double Load1, long AppMemoryBytes,
+    double RequestsPerSecond, double HubInPerSecond, double HubOutPerSecond);
 
 public record ServerSnapshot(
     double? CpuPercent, double? AppCpuPercent, int Cores,
@@ -12,13 +13,14 @@ public record ServerSnapshot(
     long AppMemory, long GcHeap, int Threads, TimeSpan AppUptime, TimeSpan? SystemUptime,
     string Host, string Os);
 
-public class ServerMetrics(Paths paths) : BackgroundService
+public class ServerMetrics(Paths paths, Traffic traffic) : BackgroundService
 {
     const int Keep = 360;
     readonly LinkedList<MetricSample> _history = new();
     readonly Lock _lock = new();
     (ulong Busy, ulong Total)? _lastCpu;
     (TimeSpan Cpu, DateTime At)? _lastApp;
+    ((long Requests, long HubIn, long HubOut) Totals, DateTime At)? _lastTraffic;
     volatile ServerSnapshot? _latest;
 
     public ServerSnapshot? Latest => _latest;
@@ -56,6 +58,12 @@ public class ServerMetrics(Paths paths) : BackgroundService
             appCpu = 100.0 * (proc.TotalProcessorTime - a.Cpu).TotalSeconds / (now - a.At).TotalSeconds / Environment.ProcessorCount;
         _lastApp = (proc.TotalProcessorTime, now);
 
+        var totals = traffic.Totals;
+        double Rate(Func<(long Requests, long HubIn, long HubOut), long> pick) =>
+            _lastTraffic is { } t && now > t.At ? (pick(totals) - pick(t.Totals)) / (now - t.At).TotalSeconds : 0;
+        var (requests, hubIn, hubOut) = (Rate(x => x.Requests), Rate(x => x.HubIn), Rate(x => x.HubOut));
+        _lastTraffic = (totals, now);
+
         var mem = ReadMeminfo();
         var drive = new DriveInfo(paths.DataDir);
         var snapshot = new ServerSnapshot(
@@ -68,7 +76,8 @@ public class ServerMetrics(Paths paths) : BackgroundService
 
         if (cpuPercent is { } cp && snapshot.MemoryTotal is > 0 && snapshot.MemoryAvailable is { } avail)
         {
-            var sample = new MetricSample(now, cp, 100.0 * (snapshot.MemoryTotal.Value - avail) / snapshot.MemoryTotal.Value, snapshot.Load?.One ?? 0, proc.WorkingSet64);
+            var sample = new MetricSample(now, cp, 100.0 * (snapshot.MemoryTotal.Value - avail) / snapshot.MemoryTotal.Value, snapshot.Load?.One ?? 0, proc.WorkingSet64,
+                requests, hubIn, hubOut);
             lock (_lock)
             {
                 _history.AddLast(sample);
