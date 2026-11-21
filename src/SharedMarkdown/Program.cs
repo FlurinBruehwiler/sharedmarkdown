@@ -134,11 +134,11 @@ app.MapPost("/api/blobs", async (HttpContext ctx, AppDb db, IpGuard guard, Limit
         System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
 
     var id = Convert.ToHexStringLower(SHA256.HashData(image.Data))[..32];
-    if (!await db.Blobs.AnyAsync(b => b.Id == id))
-    {
-        db.Blobs.Add(new Blob { Id = id, ContentType = image.ContentType, Data = image.Data, Width = image.Width, Height = image.Height, UploaderIp = ip, CreatedAt = DateTime.UtcNow });
-        await db.SaveChangesAsync();
-    }
+    // Ids are content hashes: the same image uploaded twice (even at the same moment) is stored once.
+    await db.Database.ExecuteSqlInterpolatedAsync($"""
+        INSERT OR IGNORE INTO Blobs (Id, ContentType, Data, Width, Height, UploaderIp, CreatedAt)
+        VALUES ({id}, {image.ContentType}, {image.Data}, {image.Width}, {image.Height}, {ip}, {DateTime.UtcNow})
+        """);
     return Results.Ok(new { url = $"/b/{id}" });
 });
 
