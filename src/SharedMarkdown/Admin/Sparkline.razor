@@ -1,0 +1,33 @@
+@if (Values.Count < 2)
+{
+    <div class="spark empty muted">collecting…</div>
+}
+else
+{
+    var max = Math.Max(Max ?? Values.Max(), 1e-9);
+    var min = Max is null ? Values.Min() * 0.95 : 0;
+    var range = Math.Max(max - min, 1e-9);
+    var step = Width / (Values.Count - 1);
+    double X(int i) => i * step;
+    double Y(double v) => Height - 2 - (v - min) / range * (Height - 4);
+    var c = System.Globalization.CultureInfo.InvariantCulture;
+    var points = string.Join(" ", Values.Select((v, i) => $"{X(i).ToString("0.#", c)},{Y(v).ToString("0.#", c)}"));
+    <svg class="spark" viewBox="0 0 @Width @Height" preserveAspectRatio="none" role="img" aria-label="@($"last hour, latest {Format(Values[^1])}, peak {Format(Values.Max())}")">
+        <polyline points="@points" fill="none" vector-effect="non-scaling-stroke" />
+        <circle cx="@X(Values.Count - 1).ToString(c)" cy="@Y(Values[^1]).ToString(c)" r="2.5" />
+        @for (var i = 0; i < Values.Count; i++)
+        {
+            var at = i;
+            <rect x="@((X(at) - step / 2).ToString(c))" y="0" width="@step.ToString(c)" height="@Height"><title>@Fmt.Time(Times[at]) · @Format(Values[at])</title></rect>
+        }
+    </svg>
+}
+
+@code {
+    const double Width = 240, Height = 40;
+    [Parameter, EditorRequired] public List<double> Values { get; set; } = [];
+    [Parameter, EditorRequired] public List<DateTime> Times { get; set; } = [];
+    /// Fixed top of the scale (e.g. 100 for percentages); otherwise fitted to the data.
+    [Parameter] public double? Max { get; set; }
+    [Parameter] public Func<double, string> Format { get; set; } = v => v.ToString("0.#");
+}

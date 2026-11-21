@@ -1,0 +1,26 @@
+@{
+    var pct = Total > 0 ? 100.0 * Used / Total : 0;
+    var level = pct >= Critical ? "critical" : pct >= Warn ? "warning" : "normal";
+}
+<div class="meter @level">
+    <div class="meter-head">
+        <b>@Label</b>
+        <span>@Fmt.Bytes(Used) of @Fmt.Bytes(Total) · <b>@pct.ToString("0")%</b>@(level == "critical" ? " · critical" : level == "warning" ? " · high" : "")</span>
+    </div>
+    <div class="track" role="meter" aria-label="@Label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="@pct.ToString("0")">
+        <div class="fill" style="width: @Math.Clamp(pct, 0, 100).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)%"></div>
+    </div>
+    @if (Note is not null)
+    {
+        <span class="muted small">@Note</span>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+    [Parameter] public long Used { get; set; }
+    [Parameter] public long Total { get; set; }
+    [Parameter] public double Warn { get; set; } = 80;
+    [Parameter] public double Critical { get; set; } = 90;
+    [Parameter] public string? Note { get; set; }
+}

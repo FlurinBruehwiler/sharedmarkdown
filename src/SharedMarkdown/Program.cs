@@ -24,6 +24,8 @@ builder.Services.AddSingleton<LimitsService>();
 builder.Services.AddSingleton<IpGuard>();
 builder.Services.AddSingleton<Maintenance>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<Maintenance>());
+builder.Services.AddSingleton<ServerMetrics>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ServerMetrics>());
 builder.Services.AddSignalR(o => o.MaximumReceiveMessageSize = 512 * 1024);
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 64 * 1024 * 1024);
 

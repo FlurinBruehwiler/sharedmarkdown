@@ -1,0 +1,108 @@
+@page "/admin/server"
+@attribute [Authorize]
+@implements IDisposable
+@inject ServerMetrics Metrics
+
+<h2>Server</h2>
+
+@if (Metrics.Latest is not { } s)
+{
+    <p class="muted">Collecting the first measurement…</p>
+}
+else
+{
+    var issues = Issues(s);
+    <p class="state">
+        @if (issues.Count == 0)
+        {
+            <span class="badge good" aria-hidden="true">●</span><b>All good</b>
+        }
+        else
+        {
+            var worst = issues.Max(i => i.Level);
+            <span class="badge @worst" aria-hidden="true">▲</span><b>@(worst == Level.critical ? "Critical" : "Needs attention"):</b>
+            <span>@string.Join(" · ", issues.Select(i => i.Text))</span>
+        }
+        <span class="muted"> — @s.Host, up @Duration(s.SystemUptime), app up @Duration(s.AppUptime). Refreshes every 5 s.</span>
+    </p>
+
+    var history = Metrics.History();
+    <div class="cards">
+        <div class="card">
+            <span>CPU (all @s.Cores cores)</span>
+            <b>@Pct(s.CpuPercent)</b>
+            <span>this app @Pct(s.AppCpuPercent)</span>
+            <Sparkline Values="history.Select(h => h.CpuPercent).ToList()" Times="history.Select(h => h.Time).ToList()" Max="100" Format="@(v => $"{v:0}%")" />
+        </div>
+        <div class="card">
+            <span>Load (1 min)</span>
+            <b>@(s.Load is { } l ? l.One.ToString("0.00") : "–")</b>
+            <span>@(s.Load is { } m ? $"5 min {m.Five:0.00} · 15 min {m.Fifteen:0.00}" : "not available")</span>
+            <Sparkline Values="history.Select(h => h.Load1).ToList()" Times="history.Select(h => h.Time).ToList()" Max="Math.Max(s.Cores, history.Select(h => h.Load1).DefaultIfEmpty().Max())" Format="@(v => v.ToString("0.00"))" />
+        </div>
+        <div class="card">
+            <span>App memory</span>
+            <b>@Fmt.Bytes(s.AppMemory)</b>
+            <span>GC heap @Fmt.Bytes(s.GcHeap) · @s.Threads threads</span>
+            <Sparkline Values="history.Select(h => (double)h.AppMemoryBytes).ToList()" Times="history.Select(h => h.Time).ToList()" Format="@(v => Fmt.Bytes((long)v))" />
+        </div>
+    </div>
+    <p class="muted small">Sparklines show the last hour (one point every 10 s; hover for values).</p>
+
+    <h3>Capacity</h3>
+    <div class="meters">
+        @if (s.MemoryTotal is > 0 && s.MemoryAvailable is { } avail)
+        {
+            <Meter Label="Memory" Used="s.MemoryTotal.Value - avail" Total="s.MemoryTotal.Value" Warn="85" Critical="95" Note="used, excluding reclaimable cache" />
+        }
+        @if (s.SwapTotal is > 0 && s.SwapFree is { } free)
+        {
+            <Meter Label="Swap" Used="s.SwapTotal.Value - free" Total="s.SwapTotal.Value" Warn="50" Critical="80" />
+        }
+        <Meter Label="Disk" Used="s.DiskTotal - s.DiskFree" Total="s.DiskTotal" Warn="80" Critical="90" Note="@($"filesystem holding {s.DiskPath}")" />
+    </div>
+    <p class="muted small">@s.Os</p>
+}
+
+<style>
+    .state { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin: 0 0 16px; }
+    .badge { font-size: 14px; }
+    .badge.good { color: #0ca30c; }
+    .badge.warning { color: #fab219; }
+    .badge.critical { color: #d03b3b; }
+    .small { font-size: 13px; }
+    .cards .card b { margin: 2px 0; }
+    .meters { display: grid; gap: 14px; max-width: 44rem; }
+</style>
+
+@code {
+    public enum Level { good, warning, critical }
+    record Issue(Level Level, string Text);
+    Timer? _timer;
+
+    protected override void OnInitialized() =>
+        _timer = new Timer(_ => InvokeAsync(StateHasChanged), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+
+    public void Dispose() => _timer?.Dispose();
+
+    static List<Issue> Issues(ServerSnapshot s)
+    {
+        var list = new List<Issue>();
+        void Check(string what, double pct, double warn, double crit)
+        {
+            if (pct >= crit) list.Add(new(Level.critical, $"{what} {pct:0}%"));
+            else if (pct >= warn) list.Add(new(Level.warning, $"{what} {pct:0}%"));
+        }
+        if (s.MemoryTotal is > 0 && s.MemoryAvailable is { } a) Check("memory", 100.0 * (s.MemoryTotal.Value - a) / s.MemoryTotal.Value, 85, 95);
+        if (s.SwapTotal is > 0 && s.SwapFree is { } f) Check("swap", 100.0 * (s.SwapTotal.Value - f) / s.SwapTotal.Value, 50, 80);
+        if (s.DiskTotal > 0) Check("disk", 100.0 * (s.DiskTotal - s.DiskFree) / s.DiskTotal, 80, 90);
+        if (s.Load is { } l && l.Five / s.Cores >= 2) list.Add(new(Level.critical, $"load {l.Five:0.00} on {s.Cores} cores"));
+        else if (s.Load is { } m && m.Five / s.Cores >= 1) list.Add(new(Level.warning, $"load {m.Five:0.00} on {s.Cores} cores"));
+        return list;
+    }
+
+    static string Pct(double? v) => v is { } x ? $"{x:0.#}%" : "–";
+
+    static string Duration(TimeSpan? t) => t is not { } d ? "?" :
+        d.TotalDays >= 1 ? $"{(int)d.TotalDays}d {d.Hours}h" : d.TotalHours >= 1 ? $"{(int)d.TotalHours}h {d.Minutes}m" : $"{d.Minutes}m";
+}
