@@ -49,7 +49,10 @@ export type HubError = 'bad id' | 'rate' | 'not found' | 'deleted' | 'invalid' |
 const HUB_ERRORS: readonly string[] = ['bad id', 'rate', 'not found', 'deleted', 'invalid', 'create', 'offline', 'closed'] satisfies HubError[]
 
 export function hubError(e: unknown): HubError | null {
-  return e instanceof Error && HUB_ERRORS.includes(e.message) ? e.message as HubError : null
+  if (!(e instanceof Error)) return null
+  // SignalR sends a HubException as "An unexpected error occurred invoking 'Join' on the server. HubException: deleted".
+  const code = /HubException: (.*)$/.exec(e.message)?.[1] ?? e.message
+  return HUB_ERRORS.includes(code) ? code as HubError : null
 }
 
 /** Hub methods (DocHub.cs): target -> arguments and result. */

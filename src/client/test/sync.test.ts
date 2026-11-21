@@ -33,7 +33,7 @@ class FakeHub extends Emitter<HubEvents> {
     const key = args[0] as string
     if (target === 'Join') {
       if (this.holding.has(key)) await new Promise<void>(r => this.held.set(key, [...this.held.get(key) ?? [], r]))
-      if (this.deleted.has(key)) throw new Error('deleted')
+      if (this.deleted.has(key)) throw new Error("An unexpected error occurred invoking 'Join' on the server. HubException: deleted")
       return { state: this.doc(key).encode(), maxChars: 50000, maxImageDimension: 2000 } satisfies JoinResult as ServerMethods[K]['result']
     }
     if (target === 'Submit') {
