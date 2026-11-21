@@ -193,7 +193,7 @@ body.readonly #ro { display: inline; }
 .sm-menu .k { margin-left: auto; color: var(--muted); font-size: 12px; }
 .sm-menu .sect { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); padding: 6px 10px 3px; }
 .sm-menu hr { border: 0; border-top: 1px solid var(--line); margin: 5px 4px; }
-.sm-slash { min-width: 250px; }
+.sm-slash { min-width: 250px; overflow-y: auto; overscroll-behavior: contain; }
 .sm-slash .ic { width: 24px; height: 24px; flex: none; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--muted); font-size: 12px; }
 .sm-slash small { display: block; color: var(--muted); font-size: 12px; }
 #editor .cm-quote { border-left: 3px solid var(--line); padding-left: 14px !important; color: var(--muted); }

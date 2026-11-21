@@ -1,5 +1,6 @@
 // The "/" menu: typing / at the start of an empty line offers things to insert (a table, a code
-// block, ...). Typing filters it, arrow keys and Enter pick, Escape or any other edit closes it.
+// block, ...); after a space within text, only the inline ones (a link, an image). Typing filters it,
+// arrow keys and Enter pick, Escape or any other edit closes it.
 import { Prec, type Extension } from '@codemirror/state'
 import { EditorView, ViewPlugin, keymap, type ViewUpdate } from '@codemirror/view'
 
@@ -9,11 +10,13 @@ export interface SlashItem {
   icon: string
   /** Extra words that match when filtering. */
   keywords?: string
+  /** Can go within a line of text, not only on a line of its own. */
+  inline?: boolean
   /** Replaces from..to (the typed "/query") with the inserted content. */
   run: (view: EditorView, from: number, to: number) => void
 }
 
-interface Open { from: number, to: number, query: string, index: number }
+interface Open { from: number, to: number, query: string, inline: boolean, index: number }
 
 export function slashMenu(items: SlashItem[]): Extension {
   let plugin: SlashPlugin | null = null
@@ -33,7 +36,7 @@ export function slashMenu(items: SlashItem[]): Extension {
       this.render()
     }
 
-    /** "/query" typed at the start of an otherwise empty line, with the caret right after it. */
+    /** "/query" typed on an otherwise empty line, or after a space within text, with the caret right after it. */
     detect(u: ViewUpdate): Omit<Open, 'index'> | null {
       const { state } = u.view
       // Losing focus closes the menu. (Opening needs local typing, see below, so remote edits never open it.)
@@ -41,17 +44,21 @@ export function slashMenu(items: SlashItem[]): Extension {
       const sel = state.selection.main
       if (!sel.empty) return null
       const line = state.doc.lineAt(sel.head)
-      const m = /^\/([\w ]{0,20})$/.exec(line.text)
-      if (!m || sel.head !== line.to) return null
+      const before = line.text.slice(0, sel.head - line.from)
+      const own = sel.head === line.to ? /^\/([\w ]{0,20})$/.exec(line.text) : null
+      const within = own ? null : /(?:^|\s)\/(\w{0,20})$/.exec(before)
+      const m = own ?? within
+      if (!m) return null
       // Only open on typing, then keep it open while the query is edited.
       const typed = u.transactions.some(tr => tr.isUserEvent('input.type') || tr.isUserEvent('delete'))
       if (!this.open && !typed) return null
-      return { from: line.from, to: line.to, query: m[1].toLowerCase().trim() }
+      const from = own ? line.from : sel.head - m[1].length - 1
+      return { from, to: sel.head, query: m[1].toLowerCase().trim(), inline: !own }
     }
 
     matches() {
       const q = this.open?.query ?? ''
-      return items.filter(i => (i.label + ' ' + (i.keywords ?? '')).toLowerCase().includes(q))
+      return items.filter(i => (i.inline || !this.open?.inline) && (i.label + ' ' + (i.keywords ?? '')).toLowerCase().includes(q))
     }
 
     render() {
@@ -86,11 +93,16 @@ export function slashMenu(items: SlashItem[]): Extension {
       // Layout can't be read during an editor update: position the menu in the next measure cycle.
       const el = this.el
       this.view.requestMeasure({
-        read: view => ({ at: view.coordsAtPos(open.from), w: el.offsetWidth, h: el.offsetHeight }),
+        read: view => ({ at: view.coordsAtPos(open.from), w: el.offsetWidth, h: el.scrollHeight + el.offsetHeight - el.clientHeight }),
         write: ({ at, w, h }) => {
           if (!at) return
           el.style.left = Math.max(8, Math.min(innerWidth - w - 8, at.left)) + 'px'
-          el.style.top = (at.bottom + h + 8 > innerHeight ? at.top - h - 6 : at.bottom + 6) + 'px'
+          // Below the cursor if it fits, else above; if neither fits, the roomier side, scrolling.
+          const below = innerHeight - at.bottom - 14, above = at.top - 14
+          const down = h <= below || below >= above
+          el.style.maxHeight = Math.min(h, down ? below : above) + 'px'
+          el.style.top = (down ? at.bottom + 6 : at.top - 6 - Math.min(h, above)) + 'px'
+          el.querySelector('.active')?.scrollIntoView({ block: 'nearest' })
         },
       })
     }

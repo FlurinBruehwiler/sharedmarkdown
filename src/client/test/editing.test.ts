@@ -4,7 +4,7 @@ import assert from 'node:assert'
 import { EditorSelection, EditorState, Transaction, type TransactionSpec } from '@codemirror/state'
 import { indentLess, indentMore, insertNewlineAndIndent } from '@codemirror/commands'
 import { ensureSyntaxTree } from '@codemirror/language'
-import { backspace, enter, insertTask, markdown, wrap } from '../src/editor'
+import { backspace, enter, insertInline, insertTask, markdown, wrap } from '../src/editor'
 
 type View = { state: EditorState, dispatch: (...specs: (Transaction | TransactionSpec)[]) => void }
 type Cmd = (view: never) => boolean
@@ -30,6 +30,7 @@ function run(before: string, cmd: Cmd) {
 
 // As in the keymap: where enter() doesn't apply, CodeMirror's default Enter runs.
 const enterKey = (v: View) => enter(v as never) || insertNewlineAndIndent(v as never)
+const inline = (text: string, caret: number) => (v: View) => (insertInline(v as never, v.state.selection.main.from, v.state.selection.main.to, text, caret), true)
 const task = (v: View) => (insertTask(v as never, v.state.selection.main.from, v.state.selection.main.to), true)
 
 const cases: [string, Cmd, string, string][] = [
@@ -67,6 +68,8 @@ const cases: [string, Cmd, string, string][] = [
   ['Mod-I wraps the selection in italics', wrap('*'), '|word|', '*|word|*'],
   ['The checkbox command on an empty line', task, '|', '- [ ] |'],
   ['The checkbox command after text starts a new line', task, 'Groceries|', 'Groceries\n- [ ] |'],
+  ['The link command puts the cursor in the link text', inline('[]()', 1), 'See |', 'See [|]()'],
+  ['The image command puts the cursor in the URL', inline('![]()', 4), '|', '![](|)'],
 ]
 
 for (const [name, cmd, before, after] of cases)

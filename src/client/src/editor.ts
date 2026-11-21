@@ -121,6 +121,10 @@ export function backspace(view: Pick<EditorView, 'state' | 'dispatch'>) {
   return deleteMarkupBackward(view)
 }
 
+export function insertInline(view: Pick<EditorView, 'state' | 'dispatch'>, from: number, to: number, text: string, caret: number) {
+  view.dispatch({ changes: { from, to, insert: text }, selection: { anchor: from + caret }, userEvent: 'input' })
+}
+
 export function insertTask(view: Pick<EditorView, 'state' | 'dispatch'>, from: number, to: number) {
   const line = view.state.doc.lineAt(from)
   const insert = (line.text.slice(0, from - line.from).trim() ? '\n' : '') + '- [ ] '
@@ -170,7 +174,15 @@ export function createEditor(opts: EditorOptions) {
       run: (view, from, to) => insertBlock(view, from, to, '---\n', 4),
     },
     {
-      label: 'Image', hint: 'Upload from this device', icon: '▣', keywords: 'picture photo upload',
+      label: 'Link', hint: '[text](url)', icon: '↗', keywords: 'url href web', inline: true,
+      run: (view, from, to) => insertInline(view, from, to, '[]()', 1),
+    },
+    {
+      label: 'Image', hint: '![alt](url)', icon: '▣', keywords: 'picture url embed', inline: true,
+      run: (view, from, to) => insertInline(view, from, to, '![]()', 4),
+    },
+    {
+      label: 'Upload image', hint: 'From this device', icon: '⇪', keywords: 'picture photo upload file', inline: true,
       run: (view, from, to) => {
         view.dispatch({ changes: { from, to }, selection: { anchor: from } })
         pickImages(images, view)
