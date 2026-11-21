@@ -1,16 +1,17 @@
 // Offline support around DocSync: the service worker (sw.ts) that makes the page load without a
 // network, the status line, saving on tab close, and sending edits that were left on this device
 // for documents that aren't open anywhere.
-import { Hub } from './hub'
+import { Hub, hubError } from './hub'
 import { FORMAT } from './local'
-import { Rga, applyAll, compactOps, firstBatch, type Op } from './rga'
-import { diff } from './text'
-import type { DocSync } from './sync'
+import { Rga, compactOps, firstBatch, type Op } from './rga'
+import { mergeText, rebase, replicaOf, type DocSync } from './sync'
+import { isReadKey, randomId } from './ids'
+
 
 export function setupOffline(hub: Hub, sync: DocSync) {
   // http only on localhost (service workers need a secure context anyway).
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost'))
-    addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => {}) })
+    addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(e => console.warn('Service worker registration failed', e)) })
 
   // ---------- status line ----------
   const status = document.getElementById('status')!
@@ -33,21 +34,18 @@ export function setupOffline(hub: Hub, sync: DocSync) {
       : syncing ? 'Back online, syncing…' : ''
     if (status.textContent !== text) { status.textContent = text; status.title = text }
   }
-  hub.onstatus = online => {
-    update()
-    if (!online) sync.persist()
-  }
-  sync.onchange = update
+  hub.on('status', update)
+  sync.on('change', update)
   addEventListener('online', update)
   addEventListener('offline', update)
 
   // ---------- keep edits when the tab closes ----------
   // Unsent edits are on disk at most ~300 ms after typing; write them right away when the tab goes away.
-  addEventListener('pagehide', () => { sync.persist() })
-  document.addEventListener('visibilitychange', () => { if (document.hidden) sync.persist() })
+  addEventListener('pagehide', () => { sync.copy.persist() })
+  document.addEventListener('visibilitychange', () => { if (document.hidden) sync.copy.persist() })
   addEventListener('beforeunload', e => {
     if (!sync.unsaved) return
-    sync.persist()
+    sync.copy.persist()
     if (!stored) e.preventDefault() // nowhere to keep them: ask before closing, as before
   })
 
@@ -59,43 +57,50 @@ export function setupOffline(hub: Hub, sync: DocSync) {
     running = true
     let bg: Hub | null = null
     try {
-      const docs = await sync.store.orphans(sync.id)
+      const docs = await sync.store.orphans(sync.key)
       if (!docs.size) return
       bg = new Hub(location.origin + '/hub')
       const conn = bg
-      await new Promise<void>((resolve, reject) => { conn.onopen = resolve; setTimeout(() => reject(new Error('timeout')), 10000) })
-      for (const [id, pending] of docs) {
-        if (id === sync.id) continue // opened meanwhile: DocSync adopts them
-        if (id.startsWith('r/')) continue // view-only links never have edits to send
-        const res = await bg.invoke('Join', id)
-        const rga = new Rga(randomClient())
-        rga.load(res.state)
-        const ops = pending.flatMap(p => p.v === FORMAT ? p.ops : [])
-        const { ok, applied } = applyAll(rga, ops)
-        const doc = await sync.store.doc(id)
-        if (!ok || ops.length < pending.reduce((n, p) => n + p.ops.length, 0)) {
-          // Compacted on the server since (or an old format): merge this device's text instead.
-          if (!doc) continue
-          const d = diff(rga.text(), doc.text)
-          applied.push(...rga.splice(d.p, d.d, d.i))
+      await new Promise<void>((resolve, reject) => { conn.on('open', resolve); setTimeout(() => reject(new Error('timeout')), 10000) })
+      for (const [key, pending] of docs) {
+        if (key === sync.key) continue // opened meanwhile: DocSync adopts them
+        if (isReadKey(key)) continue // view-only links never have edits to send
+        let state
+        try { state = (await bg.invoke('Join', key)).state } catch (e) {
+          if (hubError(e) !== 'deleted') throw e
+          // Deleted by an administrator: drop the edits rather than recreating the document.
+          sync.documentDeleted(key)
+          continue
         }
-        let left: Op[] = compactOps(applied), failed = false
-        while (left.length && !failed) {
+        const client = randomId(10)
+        const server = new Rga(client)
+        server.load(state)
+        const doc = await sync.store.doc(key)
+        let ops: Op[]
+        if (pending.every(p => p.v === FORMAT)) {
+          const all = pending.flatMap(p => p.ops)
+          ops = rebase(server, all, doc && doc.v === FORMAT ? replicaOf(client, doc.state, all) : null)
+        } else {
+          // Stored in an older format: merge this device's text instead (its base is what it was made on).
+          ops = doc ? mergeText(server, doc.base ?? server.text(), doc.text) : []
+        }
+        let left: Op[] = compactOps(ops), result = 'ok'
+        while (left.length && result === 'ok') {
           const [batch, rest] = firstBatch(left)
-          failed = await bg.invoke('Submit', id, batch) !== 'ok'
+          result = await bg.invoke('Submit', key, batch)
           left = rest
         }
-        if (failed) continue // rate limits and the like: try again on the next reconnect
-        await sync.store.synced(pending, doc && { ...doc, v: FORMAT, state: rga.encode(), text: rga.text() })
+        if (result === 'deleted') { sync.documentDeleted(key); continue }
+        if (result !== 'ok') { console.warn(`Unsent edits of ${key} were refused (${result}); trying again later`); continue }
+        const text = server.text()
+        await sync.store.synced(pending, doc && { ...doc, v: FORMAT, state: server.encode(), text, base: text })
       }
-    } catch {} finally {
+    } catch (e) {
+      console.warn('Sending edits kept on this device failed; trying again on the next reconnect', e)
+    } finally {
       bg?.stop()
       running = false
     }
   }
   return { syncOthers }
-}
-
-function randomClient() {
-  return Array.from(crypto.getRandomValues(new Uint8Array(8)), b => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('')
 }

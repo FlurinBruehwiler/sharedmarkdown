@@ -4,19 +4,57 @@ import type { Op, StateRun } from './rga'
 
 const RS = '\x1e'
 
+/** A tiny typed event emitter: event name -> argument list. Handlers run in the order they were added. */
+export class Emitter<E extends { [K in keyof E]: unknown[] }> {
+  readonly #handlers = new Map<keyof E, Set<(...args: never[]) => void>>()
+
+  /** Adds a handler; returns a function that removes it. */
+  on<K extends keyof E>(name: K, fn: (...args: E[K]) => void): () => void {
+    let set = this.#handlers.get(name)
+    if (!set) this.#handlers.set(name, set = new Set())
+    const h = fn as unknown as (...args: never[]) => void
+    set.add(h)
+    return () => { set.delete(h) }
+  }
+
+  emit<K extends keyof E>(name: K, ...args: E[K]) {
+    for (const fn of this.#handlers.get(name) ?? []) (fn as unknown as (...args: E[K]) => void)(...args)
+  }
+}
+
 /** Server-to-client calls (DocHub.cs / DocStore.cs): target -> arguments. */
 export interface ClientEvents {
   ops: [ops: Op[]]
   /** A peer's cursor anchor; client is null when the peer left. */
   cursor: [peer: string, client: string | null, clock: number]
   peer: []
+  /** An administrator deleted the joined document. */
   deleted: []
   presence: [viewers: number]
 }
 
+/** Events the Hub raises itself: connected (handshake done, ready for calls), and online/offline. */
+export interface ConnectionEvents {
+  open: []
+  status: [online: boolean]
+}
+export type HubEvents = ClientEvents & ConnectionEvents
+
 export interface JoinResult { state: StateRun[], maxChars: number, maxImageDimension: number }
-/** "ok", or why the batch was refused. */
-export type SubmitStatus = 'ok' | 'invalid' | 'size' | 'create' | 'rate' | 'readonly'
+/** "ok", or why the batch was refused ("deleted": an administrator removed the document). */
+export type SubmitStatus = 'ok' | 'invalid' | 'size' | 'create' | 'rate' | 'readonly' | 'deleted'
+
+/**
+ * Why a hub method failed: the server's HubException messages (DocHub.cs), plus "offline" and
+ * "closed" (no connection, or it dropped before the answer came).
+ */
+export type HubError = 'bad id' | 'rate' | 'not found' | 'deleted' | 'invalid' | 'create' | 'offline' | 'closed'
+const HUB_ERRORS: readonly string[] = ['bad id', 'rate', 'not found', 'deleted', 'invalid', 'create', 'offline', 'closed'] satisfies HubError[]
+
+/** The error code of a failed invoke(), or null for anything else. */
+export function hubError(e: unknown): HubError | null {
+  return e instanceof Error && HUB_ERRORS.includes(e.message) ? e.message as HubError : null
+}
 
 /** Hub methods (DocHub.cs): target -> arguments and result. */
 export interface ServerMethods {
@@ -30,8 +68,8 @@ export interface ServerMethods {
   Cursor: { args: [client: string, clock: number], result: void }
 }
 
-/** Handlers by target; on() ties each to its ClientEvents argument list. */
-type Handlers = { [target: string]: ((...args: never) => void) | undefined }
+/** The targets of ClientEvents; other targets from the server are ignored. */
+const SERVER_EVENTS: { [K in keyof ClientEvents]: true } = { ops: true, cursor: true, peer: true, deleted: true, presence: true }
 
 /** Hub protocol messages we receive (the handshake response is just `{}` or `{ error }`). */
 type Incoming =
@@ -47,50 +85,46 @@ type Outgoing =
 
 interface Call { resolve: (result: unknown) => void, reject: (e: Error) => void }
 
-export class Hub {
+/** Hub connection: hub.on() takes server calls (ClientEvents) and connection events ('open', 'status'). */
+export class Hub extends Emitter<HubEvents> {
   readonly url: string
-  handlers: Handlers
-  calls: Map<string, Call>
-  n: number
-  delay: number
-  connected: boolean
-  onopen: (() => void) | null
-  onstatus: ((online: boolean) => void) | null
+  readonly calls = new Map<string, Call>()
+  n = 0
+  delay = 0
+  connected = false
   ws!: WebSocket // assigned by connect(), which the constructor calls
   last = 0 // time of the last message received
-  timer?: ReturnType<typeof setInterval>
+  keepAliveTimer?: ReturnType<typeof setInterval>
   retryTimer?: ReturnType<typeof setTimeout>
   stopped = false
 
   constructor(url: string) {
+    super()
     this.url = url.replace(/^http/, 'ws')
-    this.handlers = {}
-    this.calls = new Map()
-    this.n = 0
-    this.delay = 0
-    this.connected = false
-    this.onopen = null
-    this.onstatus = null
     this.connect()
-    // Back online: reconnect now instead of waiting out the backoff (up to 10 s).
-    addEventListener('online', () => {
-      if (this.stopped || this.ws.readyState !== WebSocket.CLOSED) return // only while waiting to retry
-      clearTimeout(this.retryTimer)
-      this.delay = 0
-      this.connect()
-    })
-    // The OS says the network is gone: don't wait for the keep-alive timeout (35 s) to notice.
-    addEventListener('offline', () => { if (this.connected) this.ws.close() })
+    addEventListener('online', this.online)
+    addEventListener('offline', this.offline)
   }
 
-  /** Closes the connection for good (no reconnect). */
+  /** Back online: reconnect now instead of waiting out the backoff (up to 10 s). */
+  readonly online = () => {
+    if (this.stopped || this.ws.readyState !== WebSocket.CLOSED) return // only while waiting to retry
+    clearTimeout(this.retryTimer)
+    this.delay = 0
+    this.connect()
+  }
+
+  /** The OS says the network is gone: don't wait for the keep-alive timeout (35 s) to notice. */
+  readonly offline = () => { if (this.connected) this.ws.close() }
+
+  /** Closes the connection for good (no reconnect) and lets go of the window's listeners. */
   stop() {
     this.stopped = true
     clearTimeout(this.retryTimer)
+    removeEventListener('online', this.online)
+    removeEventListener('offline', this.offline)
     this.ws.close()
   }
-
-  on<K extends keyof ClientEvents>(name: K, fn: (...args: ClientEvents[K]) => void) { this.handlers[name] = fn }
 
   connect() {
     const ws = this.ws = new WebSocket(this.url)
@@ -109,18 +143,17 @@ export class Hub {
       if ('error' in m && m.error) return this.ws.close()
       this.connected = true
       this.delay = 0
-      this.timer = setInterval(() => {
+      this.keepAliveTimer = setInterval(() => {
         if (Date.now() - this.last > 35000) this.ws.close()
         else this.post({ type: 6 })
       }, 15000)
-      this.onstatus?.(true)
-      this.onopen?.()
+      this.emit('status', true)
+      this.emit('open')
       return
     }
     if (m.type === 1) {
       // The server sends the arguments ClientEvents declares for each target.
-      const fn = this.handlers[m.target] as ((...args: unknown[]) => void) | undefined
-      fn?.(...m.arguments)
+      if (m.target in SERVER_EVENTS) this.emit(m.target as keyof ClientEvents, ...m.arguments as never)
     } else if (m.type === 3) {
       const c = this.calls.get(m.invocationId)
       this.calls.delete(m.invocationId)
@@ -135,9 +168,10 @@ export class Hub {
     if (this.connected) this.post({ type: 1, target, arguments: args })
   }
 
+  /** Calls a hub method. Rejects with an Error whose message hubError() reads. */
   invoke<K extends keyof ServerMethods>(target: K, ...args: ServerMethods[K]['args']) {
     return new Promise<ServerMethods[K]['result']>((resolve, reject) => {
-      if (!this.connected) return reject(new Error('offline'))
+      if (!this.connected) return reject(new Error('offline' satisfies HubError))
       const id = String(++this.n)
       // The completion's result has the type ServerMethods declares for this target.
       this.calls.set(id, { resolve: r => resolve(r as ServerMethods[K]['result']), reject })
@@ -148,10 +182,10 @@ export class Hub {
   closed() {
     const was = this.connected
     this.connected = false
-    clearInterval(this.timer)
-    for (const c of this.calls.values()) c.reject(new Error('closed'))
+    clearInterval(this.keepAliveTimer)
+    for (const c of this.calls.values()) c.reject(new Error('closed' satisfies HubError))
     this.calls.clear()
-    if (was) this.onstatus?.(false)
+    if (was) this.emit('status', false)
     if (this.stopped) return
     this.retryTimer = setTimeout(() => this.connect(), this.delay)
     this.delay = Math.min(this.delay * 2 || 500, 10000)
