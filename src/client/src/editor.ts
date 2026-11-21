@@ -1,8 +1,8 @@
-import { EditorSelection, EditorState } from '@codemirror/state'
+import { EditorSelection, EditorState, type ChangeSpec, type Transaction } from '@codemirror/state'
 import { EditorView, dropCursor, keymap, placeholder, type Command } from '@codemirror/view'
 import { history as undoHistory, defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { Language, LanguageSupport } from '@codemirror/language'
-import { markdownLanguage, insertNewlineContinueMarkup, deleteMarkupBackward } from '@codemirror/lang-markdown'
+import { markdownLanguage, insertNewlineContinueMarkupCommand, deleteMarkupBackward } from '@codemirror/lang-markdown'
 import type { DelimiterType, InlineContext, MarkdownConfig, MarkdownParser } from '@lezer/markdown'
 import { livePreview } from './livepreview'
 import { blankBefore, insertTable, tableArrow, tableEnter } from './table'
@@ -43,9 +43,9 @@ const Highlight: MarkdownConfig = {
 
 // Same language data as markdownLanguage, so its commands keep working (insertNewlineContinueMarkup
 // checks markdownLanguage.isActiveAt). Its parser is typed as a plain lezer Parser but is a MarkdownParser.
-const markdown = new Language(markdownLanguage.data, (markdownLanguage.parser as MarkdownParser).configure([Highlight]), [], 'markdown')
+export const markdown = new Language(markdownLanguage.data, (markdownLanguage.parser as MarkdownParser).configure([Highlight]), [], 'markdown')
 
-const wrap = (marker: string): Command => view => {
+export const wrap = (marker: string): Command => view => {
   view.dispatch(view.state.changeByRange(r => {
     const doc = view.state.doc, n = marker.length
     if (doc.sliceString(r.from - n, r.from) === marker && doc.sliceString(r.to, r.to + n) === marker)
@@ -55,8 +55,31 @@ const wrap = (marker: string): Command => view => {
   return true
 }
 
+const continueMarkup = insertNewlineContinueMarkupCommand({ nonTightLists: false })
+
+// CodeMirror puts a blank line before the new item in a list with blank lines between items (and a blank
+// line doesn't end a list, so one list further up is enough). Obsidian never does: take that blank line out.
+function continueTight(view: Pick<EditorView, 'state' | 'dispatch'>) {
+  let tr: Transaction | undefined
+  if (!continueMarkup({ state: view.state, dispatch: t => { tr = t } }) || !tr) return false
+  const changes: ChangeSpec[] = []
+  const cursor = tr.selection?.main.head ?? 0
+  let removedBefore = 0
+  tr.changes.iterChanges((from, to, fromB, _toB, text) => {
+    let insert = text.toString()
+    const blank = /^\n[ \t>]*(?=\n)/.exec(insert)
+    if (blank) {
+      insert = insert.slice(blank[0].length)
+      if (fromB < cursor) removedBefore += blank[0].length
+    }
+    changes.push({ from, to, insert })
+  })
+  view.dispatch({ changes, selection: { anchor: cursor - removedBefore }, scrollIntoView: true, userEvent: 'input' })
+  return true
+}
+
 /** Enter like Obsidian: on an empty list item, task or quote line, remove the marker (or un-indent) instead of continuing it. */
-function enter(view: EditorView) {
+export function enter(view: Pick<EditorView, 'state' | 'dispatch'>) {
   const { state } = view
   const sel = state.selection.main
   if (sel.empty) {
@@ -75,12 +98,33 @@ function enter(view: EditorView) {
       return true
     }
   }
-  return insertNewlineContinueMarkup(view)
+  return continueTight(view)
 }
 
 function insertBlock(view: EditorView, from: number, to: number, block: string, caret: number) {
   const lead = blankBefore(view.state.doc, from)
   view.dispatch({ changes: { from, to, insert: lead + block }, selection: { anchor: from + lead.length + caret }, userEvent: 'input' })
+}
+
+/** Backspace right after a list marker removes it in one go (a task loses its box first), like Obsidian. */
+export function backspace(view: Pick<EditorView, 'state' | 'dispatch'>) {
+  const sel = view.state.selection.main
+  if (sel.empty) {
+    const line = view.state.doc.lineAt(sel.head)
+    const before = line.text.slice(0, sel.head - line.from)
+    const keep = (/^(\s*(?:[-*+]|\d+[.)]) )\[[ xX]\] $/.exec(before) ?? /^(\s*)(?:[-*+]|\d+[.)]) $/.exec(before))?.[1]
+    if (keep != null) {
+      view.dispatch({ changes: { from: line.from + keep.length, to: sel.head }, selection: { anchor: line.from + keep.length }, userEvent: 'delete.backward' })
+      return true
+    }
+  }
+  return deleteMarkupBackward(view)
+}
+
+export function insertTask(view: Pick<EditorView, 'state' | 'dispatch'>, from: number, to: number) {
+  const line = view.state.doc.lineAt(from)
+  const insert = (line.text.slice(0, from - line.from).trim() ? '\n' : '') + '- [ ] '
+  view.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, userEvent: 'input' })
 }
 
 function pasteLink(view: EditorView, url: string, linkTitle: EditorOptions['linkTitle']) {
@@ -114,6 +158,10 @@ export function createEditor(opts: EditorOptions) {
       run: (view, from, to) => insertTable(view, from, to, [['Column 1', 'Column 2', 'Column 3'], ['', '', ''], ['', '', '']]),
     },
     {
+      label: 'Checkbox', hint: 'A task you can tick off', icon: '☐', keywords: 'task todo check list',
+      run: (view, from, to) => insertTask(view, from, to),
+    },
+    {
       label: 'Code block', hint: 'Monospace, keeps spacing', icon: '{ }', keywords: 'code fence snippet',
       run: (view, from, to) => insertBlock(view, from, to, '```\n\n```', 4),
     },
@@ -142,7 +190,7 @@ export function createEditor(opts: EditorOptions) {
       { key: 'Enter', run: v => tableEnter(v) || enter(v) },
       { key: 'ArrowDown', run: tableArrow(true) },
       { key: 'ArrowUp', run: tableArrow(false) },
-      { key: 'Backspace', run: deleteMarkupBackward },
+      { key: 'Backspace', run: backspace },
       { key: 'Mod-b', run: wrap('**') },
       { key: 'Mod-i', run: wrap('*') },
       { key: 'Mod-Shift-h', run: wrap('==') },
