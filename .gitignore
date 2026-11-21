@@ -3,3 +3,4 @@ obj/
 dist/
 data/
 client/node_modules/
+.idea/

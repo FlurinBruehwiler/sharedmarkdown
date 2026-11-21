@@ -1,0 +1,57 @@
+@page "/admin/backups"
+@attribute [Authorize]
+@inject Maintenance Maintenance
+@inject Paths Paths
+
+<h2>Backups</h2>
+<p class="muted">
+    A backup is taken once a day into <code>@Paths.Backups</code>; the newest ones are kept (<code>Backups:Keep</code>, default 14).
+    Copy them off the server too: a backup on the same disk doesn't survive the disk.
+    To restore, stop the service and replace <code>@Paths.Database</code> with a backup file.
+</p>
+
+<div class="row">
+    <button @onclick="Create" disabled="@_busy">Create backup now</button>
+    <button @onclick="Cleanup" disabled="@_busy">Remove unreferenced images now</button>
+    <span class="status">@_status</span>
+</div>
+
+<table>
+    <thead><tr><th>Name</th><th>Created</th><th class="num">Size</th><th></th></tr></thead>
+    <tbody>
+        @foreach (var b in _backups)
+        {
+            <tr>
+                <td><code>@b.Name</code></td>
+                <td>@Fmt.Time(b.CreatedUtc)</td>
+                <td class="num">@Fmt.Bytes(b.Size)</td>
+                <td><a href="/admin/backups/@Uri.EscapeDataString(b.Name)" download>Download</a></td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    List<Maintenance.BackupFile> _backups = [];
+    string? _status;
+    bool _busy;
+
+    protected override void OnInitialized() => _backups = Maintenance.ListBackups();
+
+    async Task Create()
+    {
+        _busy = true;
+        try { _status = $"Created {await Maintenance.CreateBackup("manual")}."; }
+        catch (Exception e) { _status = "Backup failed: " + e.Message; }
+        _busy = false;
+        _backups = Maintenance.ListBackups();
+    }
+
+    async Task Cleanup()
+    {
+        _busy = true;
+        var n = await Maintenance.RemoveOrphanedImages();
+        _status = $"Removed {n} unreferenced images (older than 7 days).";
+        _busy = false;
+    }
+}

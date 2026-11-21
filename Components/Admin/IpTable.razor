@@ -1,0 +1,25 @@
+@if (Rows.Count == 0)
+{
+    <p class="muted">None.</p>
+}
+else
+{
+    <table>
+        <thead><tr><th>IP</th><th class="num">@Unit</th><th></th></tr></thead>
+        <tbody>
+            @foreach (var (ip, count) in Rows)
+            {
+                <tr>
+                    <td><code>@ip</code></td>
+                    <td class="num">@count</td>
+                    <td><a href="/admin/documents?ip=@Uri.EscapeDataString(ip)">documents</a> · <a href="/admin/images?ip=@Uri.EscapeDataString(ip)">images</a> · <a href="/admin/ips?ip=@Uri.EscapeDataString(ip)">block</a></td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    [Parameter, EditorRequired] public List<(string Ip, int Count)> Rows { get; set; } = [];
+    [Parameter] public string Unit { get; set; } = "count";
+}

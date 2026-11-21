@@ -1,0 +1,108 @@
+@page "/admin/ips"
+@attribute [Authorize]
+@inject IDbContextFactory<AppDb> DbFactory
+@inject IpGuard Guard
+
+<h2>IPs</h2>
+<p class="muted">IPv6 addresses are grouped by /64. A blocked IP can't open documents, edit or upload; connections already open stay until they reconnect.</p>
+
+<h3>Block an IP</h3>
+<div class="row">
+    <input placeholder="IP, e.g. 203.0.113.7" @bind="Ip" />
+    <input placeholder="Reason (optional)" @bind="_reason" style="min-width: 16rem" />
+    <button class="danger" @onclick="Block" disabled="@string.IsNullOrWhiteSpace(Ip)">Block</button>
+</div>
+<p class="status">@_status</p>
+
+<h3>Blocked</h3>
+@if (_blocked.Count == 0)
+{
+    <p class="muted">No blocked IPs.</p>
+}
+else
+{
+    <table>
+        <thead><tr><th>IP</th><th>Reason</th><th>Since</th><th></th></tr></thead>
+        <tbody>
+            @foreach (var b in _blocked)
+            {
+                <tr>
+                    <td><code>@b.Ip</code></td>
+                    <td>@b.Reason</td>
+                    <td>@Fmt.Time(b.CreatedAt)</td>
+                    <td><button @onclick="() => Unblock(b.Ip)">Unblock</button></td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+<h3>Recent activity</h3>
+<p class="muted">Counts in the current rate-limit window, busiest first.</p>
+<div class="scroll">
+<table>
+    <thead><tr><th>IP</th><th class="num">Created docs (h)</th><th class="num">Uploads (h)</th><th class="num">Edits (min)</th><th class="num">Opens (min)</th><th></th></tr></thead>
+    <tbody>
+        @foreach (var a in _activity)
+        {
+            <tr>
+                <td><code>@a.Ip</code></td>
+                <td class="num">@a.Create</td>
+                <td class="num">@a.Upload</td>
+                <td class="num">@a.Submit</td>
+                <td class="num">@a.Join</td>
+                <td><a href="/admin/documents?ip=@Uri.EscapeDataString(a.Ip)">documents</a> · <button @onclick="() => { Ip = a.Ip; }">Prefill block</button></td>
+            </tr>
+        }
+    </tbody>
+</table>
+</div>
+
+@code {
+    record Activity(string Ip, int Create, int Upload, int Submit, int Join);
+
+    [SupplyParameterFromQuery(Name = "ip")] public string? Ip { get; set; }
+    string _reason = "";
+    string? _status;
+    List<BlockedIp> _blocked = [];
+    List<Activity> _activity = [];
+
+    protected override Task OnInitializedAsync() => Reload();
+
+    async Task Reload()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _blocked = await db.BlockedIps.AsNoTracking().OrderByDescending(b => b.CreatedAt).ToListAsync();
+        _activity = Guard.Activity().GroupBy(a => a.Ip)
+            .Select(g => new Activity(g.Key, Count(g, "create"), Count(g, "upload"), Count(g, "submit"), Count(g, "join")))
+            .OrderByDescending(a => a.Create * 100 + a.Upload * 100 + a.Submit + a.Join).Take(50).ToList();
+    }
+
+    static int Count(IEnumerable<(string Bucket, string Ip, int Count)> g, string bucket) => g.Where(x => x.Bucket == bucket).Sum(x => x.Count);
+
+    async Task Block()
+    {
+        var ip = Ip!.Trim();
+        await using (var db = await DbFactory.CreateDbContextAsync())
+        {
+            if (await db.BlockedIps.FindAsync(ip) is null)
+            {
+                db.BlockedIps.Add(new BlockedIp { Ip = ip, Reason = _reason.Trim(), CreatedAt = DateTime.UtcNow });
+                await db.SaveChangesAsync();
+            }
+        }
+        await Guard.LoadBlocked();
+        _status = $"Blocked {ip}.";
+        Ip = _reason = "";
+        await Reload();
+    }
+
+    async Task Unblock(string ip)
+    {
+        await using (var db = await DbFactory.CreateDbContextAsync())
+            await db.BlockedIps.Where(b => b.Ip == ip).ExecuteDeleteAsync();
+        await Guard.LoadBlocked();
+        _status = $"Unblocked {ip}.";
+        await Reload();
+    }
+}

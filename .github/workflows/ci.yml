@@ -27,7 +27,7 @@ jobs:
           cache-dependency-path: client/package-lock.json
 
       - name: Test
-        run: cd client && npm ci && node test/rga.test.mjs
+        run: cd client && npm ci && npm run check && npm test
 
       - name: Restore
         run: dotnet restore ./SharedMarkdown.csproj -r linux-x64 -p:SelfContained=true

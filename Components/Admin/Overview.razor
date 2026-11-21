@@ -1,0 +1,64 @@
+@page "/admin"
+@attribute [Authorize]
+@inject IDbContextFactory<AppDb> DbFactory
+@inject DocStore Store
+@inject IpGuard Guard
+@inject Paths Paths
+@inject Maintenance Maintenance
+
+<h2>Overview</h2>
+
+@if (_s is { } s)
+{
+    <div class="cards">
+        <div class="card"><b>@s.Documents.ToString("N0")</b><span>documents</span></div>
+        <div class="card"><b>@s.Documents24h.ToString("N0")</b><span>created in the last 24 h</span></div>
+        <div class="card"><b>@Fmt.Bytes(s.TextBytes)</b><span>of text</span></div>
+        <div class="card"><b>@s.Images.ToString("N0")</b><span>images (@Fmt.Bytes(s.ImageBytes))</span></div>
+        <div class="card"><b>@s.Images24h.ToString("N0")</b><span>images uploaded in 24 h</span></div>
+        <div class="card"><b>@Fmt.Bytes(s.DbBytes)</b><span>database file</span></div>
+        <div class="card"><b>@Guard.Connections</b><span>open connections</span></div>
+        <div class="card"><b>@Store.LiveCount</b><span>documents in memory</span></div>
+        <div class="card"><b>@s.Blocked</b><span>blocked IPs</span></div>
+        <div class="card"><b>@(s.LastBackup is { } b ? Fmt.Time(b) : "never")</b><span>last backup</span></div>
+    </div>
+
+    <h3>Most documents created in the last 24 h</h3>
+    <IpTable Rows="s.TopCreators" Unit="documents" />
+
+    <h3>Most images uploaded in the last 24 h</h3>
+    <IpTable Rows="s.TopUploaders" Unit="images" />
+}
+else
+{
+    <p class="muted">Loading…</p>
+}
+
+@code {
+    record Stats(int Documents, int Documents24h, long TextBytes, int Images, int Images24h, long ImageBytes, long DbBytes, int Blocked, DateTime? LastBackup,
+        List<(string Ip, int Count)> TopCreators, List<(string Ip, int Count)> TopUploaders);
+    Stats? _s;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var since = DateTime.UtcNow.AddHours(-24);
+        var creators = await db.Documents.Where(d => d.CreatedAt > since).GroupBy(d => d.CreatorIp)
+            .Select(g => new { Ip = g.Key, Count = g.Count() }).OrderByDescending(x => x.Count).Take(10).ToListAsync();
+        var uploaders = await db.Blobs.Where(b => b.CreatedAt > since).GroupBy(b => b.UploaderIp)
+            .Select(g => new { Ip = g.Key, Count = g.Count() }).OrderByDescending(x => x.Count).Take(10).ToListAsync();
+        var dbBytes = new[] { "", "-wal" }.Select(f => new FileInfo(Paths.Database + f)).Where(f => f.Exists).Sum(f => f.Length);
+        _s = new Stats(
+            await db.Documents.CountAsync(),
+            await db.Documents.CountAsync(d => d.CreatedAt > since),
+            await db.Documents.SumAsync(d => (long)d.Content.Length),
+            await db.Blobs.CountAsync(),
+            await db.Blobs.CountAsync(b => b.CreatedAt > since),
+            await db.Blobs.SumAsync(b => (long)b.Data.Length),
+            dbBytes,
+            await db.BlockedIps.CountAsync(),
+            Maintenance.ListBackups().FirstOrDefault()?.CreatedUtc,
+            creators.Select(x => (x.Ip, x.Count)).ToList(),
+            uploaders.Select(x => (x.Ip, x.Count)).ToList());
+    }
+}

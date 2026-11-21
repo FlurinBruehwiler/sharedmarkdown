@@ -1,5 +1,5 @@
 # /etc/systemd/system/sharedmarkdown.service
-# The database lives outside the release folder so deploys never touch it.
+# The database, backups and keys live outside the release folder so deploys never touch them.
 [Unit]
 Description=SharedMarkdown
 After=network.target
@@ -7,12 +7,18 @@ After=network.target
 [Service]
 User=sharedmarkdown
 WorkingDirectory=/opt/sharedmarkdown/releases/current/ReleaseBuild
-ExecStart=/opt/sharedmarkdown/releases/current/ReleaseBuild/SharedMarkdown --urls http://127.0.0.1:5000
+ExecStart=/opt/sharedmarkdown/releases/current/ReleaseBuild/SharedMarkdown --urls http://127.0.0.1:5200
 Environment=DataDir=/opt/sharedmarkdown/data
 Environment=ASPNETCORE_ENVIRONMENT=Production
+# Secrets, not in git. Contains e.g.:  Admin__Password=<long random password>
+EnvironmentFile=/opt/sharedmarkdown/sharedmarkdown.env
 Restart=always
-# The app flushes documents to SQLite on shutdown.
+# The app flushes open documents to SQLite on shutdown.
 TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/sharedmarkdown/data
 
 [Install]
 WantedBy=multi-user.target

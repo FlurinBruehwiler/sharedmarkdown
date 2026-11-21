@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace SharedMarkdown;
@@ -10,17 +11,23 @@ public class DocState(string id)
     public Rga Doc = new();
     public bool Persisted;
     public bool Dirty;
+    public bool Deleted;
+    public string CreatorIp = "";
     public int Viewers;
     public DateTime LastTouched = DateTime.UtcNow;
     public readonly SemaphoreSlim Lock = new(1, 1);
+
+    /// True until the first edit; that edit counts as creating the document.
+    public bool IsNew => !Persisted && Doc.Items == 0;
 }
 
 /// Keeps live documents in memory, the SQLite copy is written behind by DocFlusher.
-public class DocStore(IServiceScopeFactory scopes)
+public class DocStore(IServiceScopeFactory scopes, IHubContext<DocHub> hub, ILogger<DocStore> log)
 {
-    public const int MaxLength = 1_000_000;
     readonly ConcurrentDictionary<string, DocState> _docs = new();
     readonly SemaphoreSlim _loadLock = new(1, 1);
+
+    public int LiveCount => _docs.Count;
 
     public async Task<DocState> Get(string id)
     {
@@ -37,19 +44,20 @@ public class DocStore(IServiceScopeFactory scopes)
             {
                 s.Doc = Rga.Decode(row.State);
                 s.Persisted = true;
+                s.CreatorIp = row.CreatorIp;
+                // Nobody has it open (it wasn't in memory), so this is a safe moment to drop tombstones.
+                // Clients that reconnect with edits against the old ids fall back to a text merge.
+                if (s.Doc.Items - s.Doc.Length > Math.Max(1000, s.Doc.Length))
+                {
+                    log.LogInformation("Compacting {Doc}: {Items} items, {Length} visible", id, s.Doc.Items, s.Doc.Length);
+                    s.Doc = Rga.Compacted(s.Doc.Text());
+                    s.Dirty = true;
+                }
             }
             _docs[id] = s;
             return s;
         }
         finally { _loadLock.Release(); }
-    }
-
-    public static bool TryApply(DocState s, System.Text.Json.JsonElement ops)
-    {
-        if (!s.Doc.Apply(ops, MaxLength)) return false;
-        s.Dirty = true;
-        s.LastTouched = DateTime.UtcNow;
-        return true;
     }
 
     public async Task Flush(bool evict)
@@ -59,7 +67,7 @@ public class DocStore(IServiceScopeFactory scopes)
         var now = DateTime.UtcNow;
         foreach (var s in _docs.Values)
         {
-            if (s.Dirty)
+            if (s.Dirty && !s.Deleted)
             {
                 string content, state;
                 await s.Lock.WaitAsync();
@@ -77,7 +85,7 @@ public class DocStore(IServiceScopeFactory scopes)
                 }
                 else
                 {
-                    db.Documents.Add(new Document { Id = s.Id, State = state, Content = content, Title = title, CreatedAt = now, UpdatedAt = now });
+                    db.Documents.Add(new Document { Id = s.Id, State = state, Content = content, Title = title, CreatorIp = s.CreatorIp, CreatedAt = now, UpdatedAt = now });
                     await db.SaveChangesAsync();
                     db.ChangeTracker.Clear();
                     s.Persisted = true;
@@ -88,6 +96,20 @@ public class DocStore(IServiceScopeFactory scopes)
                 _docs.TryRemove(s.Id, out _);
             }
         }
+    }
+
+    /// Deletes documents (admin action); anyone viewing them is told and stops syncing.
+    public async Task Delete(IReadOnlyCollection<string> ids)
+    {
+        foreach (var id in ids)
+            if (_docs.TryRemove(id, out var s)) s.Deleted = true;
+        using var scope = scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDb>();
+        foreach (var chunk in ids.Chunk(500))
+            await db.Documents.Where(d => chunk.Contains(d.Id)).ExecuteDeleteAsync();
+        foreach (var id in ids)
+            await hub.Clients.Group(id).SendAsync("deleted");
+        log.LogInformation("Deleted {Count} documents", ids.Count);
     }
 
     public async Task<Dictionary<string, string>> Titles(IEnumerable<string> ids)
@@ -114,25 +136,29 @@ public class DocStore(IServiceScopeFactory scopes)
     {
         foreach (var raw in md.AsSpan().EnumerateLines())
         {
-            var line = Regex.Replace(Regex.Replace(raw.ToString(), "&#x([0-9a-fA-F]+);", m => char.ConvertFromUtf32(Convert.ToInt32(m.Groups[1].Value, 16))), @"\\(.)", "$1").Trim().TrimStart("#>-*+ ".ToCharArray()).Trim();
+            var line = Regex.Replace(Regex.Replace(raw.ToString(), "&#x([0-9a-fA-F]{1,6});", m => Codepoint(Convert.ToInt32(m.Groups[1].Value, 16))), @"\\(.)", "$1").Trim().TrimStart("#>-*+ ".ToCharArray()).Trim();
             if (line.Length == 0) continue;
             return line.Length > 80 ? line[..80] : line;
         }
         return "";
     }
+
+    static string Codepoint(int cp) => cp is > 0 and <= 0x10FFFF and not (>= 0xD800 and <= 0xDFFF) ? char.ConvertFromUtf32(cp) : "";
 }
 
-public class DocFlusher(DocStore store, ILogger<DocFlusher> log) : BackgroundService
+public class DocFlusher(DocStore store, IpGuard guard, ILogger<DocFlusher> log) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        var ticks = 0;
         try
         {
             while (await timer.WaitForNextTickAsync(ct))
             {
                 try { await store.Flush(evict: true); }
                 catch (Exception e) { log.LogError(e, "Flush failed"); }
+                if (++ticks % 300 == 0) guard.Prune();
             }
         }
         catch (OperationCanceledException) { }

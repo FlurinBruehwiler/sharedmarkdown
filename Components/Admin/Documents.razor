@@ -1,0 +1,122 @@
+@page "/admin/documents"
+@attribute [Authorize]
+@inject IDbContextFactory<AppDb> DbFactory
+@inject DocStore Store
+
+<h2>Documents</h2>
+
+<div class="row">
+    <input placeholder="Search title or id" @bind="Query" @bind:event="oninput" @bind:after="Reload" />
+    <input placeholder="Creator IP" @bind="Ip" @bind:after="Reload" />
+    <span class="muted">@_total.ToString("N0") matching</span>
+</div>
+
+@if (!string.IsNullOrEmpty(Ip) && _total > 0)
+{
+    <div class="row">
+        @if (_confirmAll)
+        {
+            <span>Delete all @_total documents created by <code>@Ip</code>? This can't be undone (except from a backup).</span>
+            <button class="danger" @onclick="DeleteAll" disabled="@_busy">Delete all</button>
+            <button @onclick="() => _confirmAll = false">Cancel</button>
+        }
+        else
+        {
+            <button class="danger" @onclick="() => _confirmAll = true">Delete all documents from this IP</button>
+            <a href="/admin/ips?ip=@Uri.EscapeDataString(Ip)">Block this IP</a>
+        }
+    </div>
+}
+<p class="status">@_status</p>
+
+<div class="scroll">
+<table>
+    <thead><tr><th>Title</th><th class="num">Size</th><th>Creator IP</th><th>Created</th><th>Updated</th><th></th></tr></thead>
+    <tbody>
+        @foreach (var d in _docs)
+        {
+            <tr>
+                <td><a href="/@d.Id" target="_blank" rel="noopener">@Fmt.Title(d.Title)</a></td>
+                <td class="num">@d.Length.ToString("N0")</td>
+                <td><a href="/admin/documents?ip=@Uri.EscapeDataString(d.CreatorIp)"><code>@d.CreatorIp</code></a></td>
+                <td>@Fmt.Time(d.CreatedAt)</td>
+                <td>@Fmt.Time(d.UpdatedAt)</td>
+                <td>
+                    @if (_pending == d.Id)
+                    {
+                        <button class="danger" @onclick="() => Delete(d.Id)" disabled="@_busy">Confirm delete</button>
+                        <button @onclick="() => _pending = null">Cancel</button>
+                    }
+                    else
+                    {
+                        <button class="danger" @onclick="() => _pending = d.Id">Delete</button>
+                    }
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+</div>
+
+<div class="row" style="margin-top: 12px">
+    <button @onclick="() => Page(-1)" disabled="@(_page == 0)">Previous</button>
+    <span class="muted">Page @(_page + 1) of @Math.Max(1, (_total + PageSize - 1) / PageSize)</span>
+    <button @onclick="() => Page(1)" disabled="@((_page + 1) * PageSize >= _total)">Next</button>
+</div>
+
+@code {
+    const int PageSize = 50;
+    record Row(string Id, string Title, int Length, string CreatorIp, DateTime CreatedAt, DateTime UpdatedAt);
+
+    [SupplyParameterFromQuery(Name = "ip")] public string? Ip { get; set; }
+    string Query { get; set; } = "";
+    List<Row> _docs = [];
+    int _total, _page;
+    string? _pending, _status;
+    bool _busy, _confirmAll;
+
+    protected override Task OnParametersSetAsync() => Reload();
+
+    IQueryable<Document> Filtered(AppDb db)
+    {
+        var q = db.Documents.AsNoTracking();
+        if (!string.IsNullOrWhiteSpace(Ip)) q = q.Where(d => d.CreatorIp == Ip.Trim());
+        if (!string.IsNullOrWhiteSpace(Query)) q = q.Where(d => d.Title.Contains(Query) || d.Id == Query.Trim());
+        return q;
+    }
+
+    async Task Reload()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var q = Filtered(db);
+        _total = await q.CountAsync();
+        if (_page * PageSize >= _total) _page = 0;
+        _docs = await q.OrderByDescending(d => d.UpdatedAt).Skip(_page * PageSize).Take(PageSize)
+            .Select(d => new Row(d.Id, d.Title, d.Content.Length, d.CreatorIp, d.CreatedAt, d.UpdatedAt)).ToListAsync();
+    }
+
+    async Task Page(int delta) { _page += delta; await Reload(); }
+
+    async Task Delete(string id)
+    {
+        _busy = true;
+        await Store.Delete([id]);
+        _status = "Document deleted.";
+        _pending = null;
+        _busy = false;
+        await Reload();
+    }
+
+    async Task DeleteAll()
+    {
+        _busy = true;
+        List<string> ids;
+        await using (var db = await DbFactory.CreateDbContextAsync())
+            ids = await Filtered(db).Select(d => d.Id).ToListAsync();
+        await Store.Delete(ids);
+        _status = $"Deleted {ids.Count} documents.";
+        _confirmAll = false;
+        _busy = false;
+        await Reload();
+    }
+}

@@ -1,0 +1,22 @@
+@inherits LayoutComponentBase
+
+<div class="admin-layout">
+    <header class="admin-header">
+        <div class="admin-branding">
+            <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)" /><path d="M9 22l8-12m-1 12l8-12" stroke="#fff" stroke-width="3" stroke-linecap="round" /></svg>
+            <h1>SharedMarkdown admin</h1>
+            <span class="sp"></span>
+            <a href="/">Back to editor</a>
+            <form method="post" action="/admin/logout"><AntiforgeryToken /><button type="submit">Log out</button></form>
+        </div>
+        <nav class="admin-nav" aria-label="Admin sections">
+            <NavLink href="/admin" Match="NavLinkMatch.All">Overview</NavLink>
+            <NavLink href="/admin/documents">Documents</NavLink>
+            <NavLink href="/admin/images">Images</NavLink>
+            <NavLink href="/admin/ips">IPs</NavLink>
+            <NavLink href="/admin/limits">Limits</NavLink>
+            <NavLink href="/admin/backups">Backups</NavLink>
+        </nav>
+    </header>
+    <main class="admin-content">@Body</main>
+</div>

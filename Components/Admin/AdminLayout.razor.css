@@ -1,0 +1,9 @@
+.admin-layout { max-width: 72rem; margin: 0 auto; padding: 20px 16px 60px; }
+.admin-branding { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.admin-branding h1 { margin: 0; font-size: 1.25em; }
+.admin-branding form { margin: 0; }
+.sp { flex: 1; }
+.admin-nav { display: flex; flex-wrap: wrap; gap: 4px; margin: 16px 0 24px; border-bottom: 1px solid var(--line); }
+.admin-nav ::deep a { padding: 8px 12px; color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.admin-nav ::deep a.active { color: var(--text); border-bottom-color: var(--accent); }
+.admin-nav ::deep a:hover { color: var(--text); }

@@ -12,6 +12,10 @@ public class Assets
 
     readonly Dictionary<string, Entry> _files = new(StringComparer.Ordinal);
     Entry? _index;
+    string _csp = "";
+
+    /// Name of the current JS bundle (content-hashed), used by clients to notice a new deploy.
+    public string Build { get; private set; } = "";
 
     public Assets(IWebHostEnvironment env)
     {
@@ -24,12 +28,28 @@ public class Assets
             var raw = File.ReadAllBytes(path);
             var entry = new Entry(TypeOf(path), raw, Compress(raw, true), Compress(raw, false),
                 "\"" + Convert.ToHexString(SHA256.HashData(raw))[..16] + "\"", rel.StartsWith("/assets/"));
-            if (rel == "/index.html") _index = entry; else _files[rel] = entry;
+            if (rel == "/index.html") { _index = entry; _csp = CspFor(System.Text.Encoding.UTF8.GetString(raw)); }
+            else _files[rel] = entry;
+            if (rel.StartsWith("/assets/") && rel.EndsWith(".js")) Build = rel;
         }
     }
 
-    public Task ServeIndex(HttpContext ctx) =>
-        _index is null ? Results.Text("Frontend not built. Run `node build.mjs` in client/.").ExecuteAsync(ctx) : Serve(ctx, _index);
+    public Task ServeIndex(HttpContext ctx)
+    {
+        if (_index is null) return Results.Text("Frontend not built. Run `node build.mjs` in client/.").ExecuteAsync(ctx);
+        ctx.Response.Headers.ContentSecurityPolicy = _csp;
+        return Serve(ctx, _index);
+    }
+
+    /// Only our own bundle and the inline theme script (by hash) may run on the editor page.
+    /// Styles allow 'unsafe-inline' because CodeMirror injects its base styles at runtime.
+    static string CspFor(string html)
+    {
+        var hashes = System.Text.RegularExpressions.Regex.Matches(html, "<script>(.*?)</script>", System.Text.RegularExpressions.RegexOptions.Singleline)
+            .Select(m => $"'sha256-{Convert.ToBase64String(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(m.Groups[1].Value)))}'");
+        return "default-src 'self'; script-src 'self' " + string.Join(' ', hashes) + "; style-src 'self' 'unsafe-inline'; " +
+               "img-src 'self' data: blob: https:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+    }
 
     public bool TryServe(HttpContext ctx, out Task task)
     {

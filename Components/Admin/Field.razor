@@ -1,0 +1,18 @@
+<tr>
+    <td>@Label @if (Hint is not null) { <br /><span class="muted">@Hint</span> }</td>
+    <td><input type="number" min="1" value="@Value" @onchange="Changed" /></td>
+    <td class="muted">@(Value == Default ? "default" : $"default {Default:N0}")</td>
+</tr>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+    [Parameter] public string? Hint { get; set; }
+    [Parameter] public int Value { get; set; }
+    [Parameter] public EventCallback<int> ValueChanged { get; set; }
+    [Parameter] public int Default { get; set; }
+
+    async Task Changed(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var v)) await ValueChanged.InvokeAsync(Value = v);
+    }
+}

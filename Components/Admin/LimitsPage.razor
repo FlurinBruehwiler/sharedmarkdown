@@ -1,0 +1,67 @@
+@page "/admin/limits"
+@attribute [Authorize]
+@inject LimitsService Limits
+
+<h2>Limits</h2>
+<p class="muted">Changes apply immediately and are stored in the database. Defaults come from the <code>Limits</code> section of appsettings.json (or <code>Limits__…</code> environment variables).</p>
+
+<EditForm Model="_model" OnValidSubmit="Save" FormName="limits">
+    <table class="limits">
+        <tbody>
+            <Field Label="New documents per IP per hour" @bind-Value="_model.DocumentsPerIpPerHour" Default="_defaults.DocumentsPerIpPerHour" />
+            <Field Label="Max document length (characters)" @bind-Value="_model.MaxDocumentChars" Default="_defaults.MaxDocumentChars" />
+            <Field Label="Max stored edit history per document (items)" Hint="Deleted characters count until the document is compacted." @bind-Value="_model.MaxDocumentItems" Default="_defaults.MaxDocumentItems" />
+            <Field Label="Image uploads per IP per hour" @bind-Value="_model.UploadsPerIpPerHour" Default="_defaults.UploadsPerIpPerHour" />
+            <Field Label="Max image upload size (bytes)" Hint="@Fmt.Bytes(_model.MaxUploadBytes)" @bind-Value="_model.MaxUploadBytes" Default="_defaults.MaxUploadBytes" />
+            <Field Label="Scale images down to (px, longest side)" @bind-Value="_model.MaxImageDimension" Default="_defaults.MaxImageDimension" />
+            <Field Label="Open connections per IP" @bind-Value="_model.MaxConnectionsPerIp" Default="_defaults.MaxConnectionsPerIp" />
+            <Field Label="Documents opened per IP per minute" @bind-Value="_model.JoinsPerIpPerMinute" Default="_defaults.JoinsPerIpPerMinute" />
+            <Field Label="Edit batches per IP per minute" @bind-Value="_model.SubmitsPerIpPerMinute" Default="_defaults.SubmitsPerIpPerMinute" />
+            <Field Label="Title lookups per IP per minute" @bind-Value="_model.TitleLookupsPerIpPerMinute" Default="_defaults.TitleLookupsPerIpPerMinute" />
+            <Field Label="Admin login attempts per IP per hour" @bind-Value="_model.AdminLoginAttemptsPerIpPerHour" Default="_defaults.AdminLoginAttemptsPerIpPerHour" />
+        </tbody>
+    </table>
+    <div class="row" style="margin-top: 12px">
+        <button type="submit">Save</button>
+        <button type="button" @onclick="Reset">Reset to defaults</button>
+        <span class="status">@_status</span>
+    </div>
+</EditForm>
+
+<style>
+    .limits td:first-child { width: 55%; }
+    .limits input { width: 9rem; text-align: right; }
+</style>
+
+@code {
+    Limits _model = new(), _defaults = new();
+    string? _status;
+
+    protected override void OnInitialized() => Load();
+
+    void Load()
+    {
+        _model = Copy(Limits.Current);
+        _defaults = Limits.Defaults;
+    }
+
+    static Limits Copy(Limits l) => System.Text.Json.JsonSerializer.Deserialize<Limits>(System.Text.Json.JsonSerializer.Serialize(l))!;
+
+    async Task Save()
+    {
+        if (typeof(Limits).GetProperties().Any(p => (int)p.GetValue(_model)! < 1))
+        {
+            _status = "All values must be at least 1.";
+            return;
+        }
+        await Limits.Save(Copy(_model));
+        _status = "Saved.";
+    }
+
+    async Task Reset()
+    {
+        await Limits.Reset();
+        Load();
+        _status = "Reset to defaults.";
+    }
+}

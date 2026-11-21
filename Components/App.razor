@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <base href="/" />
+    <title>SharedMarkdown admin</title>
+    <link rel="stylesheet" href="@Assets["SharedMarkdown.styles.css"]" />
+    <style>
+        :root { --bg: #fbfbfa; --panel: #fff; --text: #1f2328; --muted: #6b6f76; --line: #e3e3df; --accent: #2563d9; --danger: #c62828; --hover: #f0f0ed; }
+        @@media (prefers-color-scheme: dark) {
+            :root { --bg: #17181b; --panel: #1e1f23; --text: #e6e6e3; --muted: #9a9ca3; --line: #2c2e33; --accent: #6e9bff; --danger: #ff6b6b; --hover: #292b30; }
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+        a { color: var(--accent); }
+        h2 { margin: 0 0 12px; font-size: 1.3em; }
+        h3 { margin: 24px 0 8px; font-size: 1.05em; }
+        button, input, select { font: inherit; color: inherit; }
+        input, select { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+        button { background: var(--hover); border: 1px solid var(--line); border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+        button:hover { border-color: var(--muted); }
+        button.danger { color: var(--danger); }
+        button:disabled { opacity: .5; cursor: default; }
+        table { border-collapse: collapse; width: 100%; font-size: 14px; }
+        th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+        th { color: var(--muted); font-weight: 550; }
+        td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+        code { font-size: .9em; }
+        .muted { color: var(--muted); }
+        .status { color: var(--accent); min-height: 1.5em; }
+        .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+        .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+        .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+        .card b { display: block; font-size: 1.5em; font-variant-numeric: tabular-nums; }
+        .card span { color: var(--muted); font-size: 13px; }
+        .scroll { overflow-x: auto; }
+    </style>
+    <HeadOutlet @rendermode="PageRenderMode" />
+</head>
+<body>
+    <Routes @rendermode="PageRenderMode" />
+    <script src="_framework/blazor.web.js"></script>
+</body>
+</html>
+
+@code {
+    [CascadingParameter] HttpContext HttpContext { get; set; } = default!;
+
+    // The login page is static server rendering, so it can set the auth cookie; everything else is interactive.
+    IComponentRenderMode? PageRenderMode => HttpContext.AcceptsInteractiveRouting() ? InteractiveServer : null;
+}

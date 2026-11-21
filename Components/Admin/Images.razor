@@ -1,0 +1,106 @@
+@page "/admin/images"
+@attribute [Authorize]
+@inject IDbContextFactory<AppDb> DbFactory
+
+<h2>Images</h2>
+
+<div class="row">
+    <input placeholder="Uploader IP" @bind="Ip" @bind:after="Reload" />
+    <span class="muted">@_total.ToString("N0") images</span>
+    @if (!string.IsNullOrEmpty(Ip) && _total > 0)
+    {
+        @if (_confirmAll)
+        {
+            <button class="danger" @onclick="DeleteAll">Delete all @_total from this IP</button>
+            <button @onclick="() => _confirmAll = false">Cancel</button>
+        }
+        else
+        {
+            <button class="danger" @onclick="() => _confirmAll = true">Delete all from this IP</button>
+        }
+    }
+</div>
+<p class="muted">Images no document links to anymore are removed automatically after 7 days. Deleting an image here removes it from every document that shows it; browsers that cached it may still show it for a while.</p>
+<p class="status">@_status</p>
+
+<div class="grid">
+    @foreach (var b in _images)
+    {
+        <figure>
+            <a href="/b/@b.Id" target="_blank" rel="noopener"><img src="/b/@b.Id" loading="lazy" alt="" /></a>
+            <figcaption>
+                @b.Width × @b.Height · @Fmt.Bytes(b.Size)<br />
+                <a href="/admin/images?ip=@Uri.EscapeDataString(b.UploaderIp)"><code>@b.UploaderIp</code></a> · @Fmt.Time(b.CreatedAt)<br />
+                @if (_pending == b.Id)
+                {
+                    <button class="danger" @onclick="() => Delete(b.Id)">Confirm</button>
+                    <button @onclick="() => _pending = null">Cancel</button>
+                }
+                else
+                {
+                    <button class="danger" @onclick="() => _pending = b.Id">Delete</button>
+                }
+            </figcaption>
+        </figure>
+    }
+</div>
+
+<div class="row" style="margin-top: 12px">
+    <button @onclick="() => Page(-1)" disabled="@(_page == 0)">Previous</button>
+    <span class="muted">Page @(_page + 1) of @Math.Max(1, (_total + PageSize - 1) / PageSize)</span>
+    <button @onclick="() => Page(1)" disabled="@((_page + 1) * PageSize >= _total)">Next</button>
+</div>
+
+<style>
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+    .grid figure { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    .grid img { display: block; width: 100%; height: 140px; object-fit: contain; background: var(--hover); }
+    .grid figcaption { padding: 8px 10px; font-size: 13px; color: var(--muted); }
+    .grid figcaption button { margin-top: 6px; padding: 2px 8px; }
+</style>
+
+@code {
+    const int PageSize = 48;
+    record Row(string Id, int Width, int Height, long Size, string UploaderIp, DateTime CreatedAt);
+
+    [SupplyParameterFromQuery(Name = "ip")] public string? Ip { get; set; }
+    List<Row> _images = [];
+    int _total, _page;
+    string? _pending, _status;
+    bool _confirmAll;
+
+    protected override Task OnParametersSetAsync() => Reload();
+
+    IQueryable<Blob> Filtered(AppDb db) =>
+        string.IsNullOrWhiteSpace(Ip) ? db.Blobs.AsNoTracking() : db.Blobs.AsNoTracking().Where(b => b.UploaderIp == Ip.Trim());
+
+    async Task Reload()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _total = await Filtered(db).CountAsync();
+        if (_page * PageSize >= _total) _page = 0;
+        _images = await Filtered(db).OrderByDescending(b => b.CreatedAt).Skip(_page * PageSize).Take(PageSize)
+            .Select(b => new Row(b.Id, b.Width, b.Height, b.Data.Length, b.UploaderIp, b.CreatedAt)).ToListAsync();
+    }
+
+    async Task Page(int delta) { _page += delta; await Reload(); }
+
+    async Task Delete(string id)
+    {
+        await using (var db = await DbFactory.CreateDbContextAsync())
+            await db.Blobs.Where(b => b.Id == id).ExecuteDeleteAsync();
+        _status = "Image deleted.";
+        _pending = null;
+        await Reload();
+    }
+
+    async Task DeleteAll()
+    {
+        int n;
+        await using (var db = await DbFactory.CreateDbContextAsync())
+            n = await Filtered(db).ExecuteDeleteAsync();
+        _status = $"Deleted {n} images.";
+        _confirmAll = false;
+        await Reload();
+    }
+}

@@ -1,0 +1,62 @@
+@page "/admin/login"
+@layout EmptyLayout
+@attribute [ExcludeFromInteractiveRouting]
+@using Microsoft.AspNetCore.Authentication
+@using Microsoft.AspNetCore.Authentication.Cookies
+@using System.Security.Claims
+@inject IConfiguration Config
+@inject IpGuard Guard
+@inject LimitsService Limits
+@inject ILogger<Login> Log
+
+<div class="login">
+    <h2>SharedMarkdown admin</h2>
+    @if (string.IsNullOrEmpty(Config["Admin:Password"]))
+    {
+        <p class="muted">The admin dashboard is disabled. Set <code>Admin__Password</code> (environment) or <code>Admin:Password</code> (appsettings) to enable it.</p>
+    }
+    else
+    {
+        <form method="post" @formname="login" @onsubmit="SignIn">
+            <AntiforgeryToken />
+            <label>Password<br /><input type="password" name="Password" autocomplete="current-password" autofocus required /></label>
+            <button type="submit">Log in</button>
+            <p class="error">@_error</p>
+        </form>
+    }
+</div>
+
+<style>
+    .login { max-width: 22rem; margin: 18vh auto 0; padding: 0 16px; }
+    .login input { width: 100%; margin: 4px 0 12px; }
+    .login .error { color: var(--danger); min-height: 1.5em; }
+</style>
+
+@code {
+    [CascadingParameter] HttpContext HttpContext { get; set; } = default!;
+    [SupplyParameterFromForm] string? Password { get; set; }
+    [SupplyParameterFromQuery] string? ReturnUrl { get; set; }
+    string? _error;
+
+    async Task SignIn()
+    {
+        var ip = IpGuard.IpOf(HttpContext);
+        if (!Guard.TryTake("login", ip, Limits.Current.AdminLoginAttemptsPerIpPerHour, TimeSpan.FromHours(1)))
+        {
+            _error = "Too many attempts, try again later.";
+            return;
+        }
+        if (!Program.CheckAdminPassword(Config, Password))
+        {
+            Log.LogWarning("Failed admin login from {Ip}", ip);
+            _error = "Wrong password.";
+            return;
+        }
+        var identity = new ClaimsIdentity([new Claim(ClaimTypes.Name, "admin")], CookieAuthenticationDefaults.AuthenticationScheme);
+        await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
+        Log.LogInformation("Admin login from {Ip}", ip);
+        // Only return to admin pages on this site (never an absolute or protocol-relative URL).
+        var target = ReturnUrl is { } r && r.StartsWith("/admin") && !r.StartsWith("//") ? r : "/admin";
+        HttpContext.Response.Redirect(target);
+    }
+}

@@ -1,0 +1,13 @@
+# Add to the server's Caddyfile. Caddy handles TLS, proxies WebSockets (/hub, /_blazor) automatically
+# and sets X-Forwarded-For/-Proto/-Host, which the app uses for per-IP limits (it trusts loopback).
+sharedmarkdown.com {
+	encode zstd gzip
+	request_body {
+		max_size 12MB # a bit above Limits:MaxUploadBytes
+	}
+	reverse_proxy 127.0.0.1:5200
+}
+
+www.sharedmarkdown.com {
+	redir https://sharedmarkdown.com{uri} permanent
+}
