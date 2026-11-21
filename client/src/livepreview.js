@@ -50,11 +50,6 @@ class CheckboxWidget extends WidgetType {
   ignoreEvent() { return false }
 }
 
-class HrWidget extends WidgetType {
-  eq() { return true }
-  toDOM() { return document.createElement('hr') }
-}
-
 const hidden = Decoration.replace({})
 const line = cls => Decoration.line({ class: cls })
 const mark = cls => Decoration.mark({ class: cls })
@@ -119,7 +114,11 @@ function build(view) {
           case 'QuoteMark': if (!active(n.from)) hideWithSpace(n.from, n.to); break
           case 'Table': lines(n.from, n.to, 'cm-table'); return false
           case 'HorizontalRule':
-            if (!active(n.from)) decos.push(Decoration.replace({ widget: new HrWidget() }).range(n.from, n.to))
+            // Keep the text (just invisible) and draw the rule in the same line, so the height never changes.
+            if (!active(n.from)) {
+              decos.push(line('cm-hr').range(doc.lineAt(n.from).from))
+              decos.push(mark('cm-hr-text').range(n.from, n.to))
+            }
             break
           case 'ListMark': {
             const item = n.node.parent

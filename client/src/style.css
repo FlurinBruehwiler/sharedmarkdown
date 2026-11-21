@@ -82,7 +82,8 @@ body.offline #status { display: inline; }
 #editor .cm-task { margin: 0 .35em 0 0; vertical-align: -.1em; cursor: pointer; accent-color: var(--accent); }
 #editor .cm-done { color: var(--muted); text-decoration: line-through; }
 #editor .cm-img { display: block; max-width: 100%; border-radius: 6px; margin: 4px 0; }
-#editor .cm-line hr { border: 0; border-top: 1px solid var(--line); margin: .8em 0; }
+#editor .cm-hr { background: linear-gradient(var(--line), var(--line)) center / 100% 1px no-repeat; }
+#editor .cm-hr-text { color: transparent; }
 #editor .cm-ghost { position: relative; border-left: 2px solid var(--ghost); margin: 0 -1px; pointer-events: none; }
 #editor .cm-ghost::before { content: ""; position: absolute; top: -3px; left: -4px; width: 6px; height: 6px; border-radius: 50%; background: var(--ghost); }
 
