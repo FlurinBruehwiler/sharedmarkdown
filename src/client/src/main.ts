@@ -1,5 +1,5 @@
 import { EditorState, EditorSelection } from '@codemirror/state'
-import { EditorView, keymap, placeholder, type Command } from '@codemirror/view'
+import { EditorView, ViewPlugin, dropCursor, keymap, placeholder, type Command } from '@codemirror/view'
 import { history as undoHistory, defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { Language, LanguageSupport } from '@codemirror/language'
 import { markdownLanguage, insertNewlineContinueMarkup, deleteMarkupBackward } from '@codemirror/lang-markdown'
@@ -240,7 +240,7 @@ function replaceSrc(view: EditorView, from: string, to: string | null) {
  * with the local file; when the upload is done the src becomes the real `/b/<id>` URL.
  * Other people see "Uploading image…" in the meantime.
  */
-function insertImages(view: EditorView, files: FileList) {
+function insertImages(view: EditorView, files: FileList, at?: number) {
   const images = Array.from(files).filter(f => f.type.startsWith('image/'))
   if (!images.length) return false
   const inserts = images.map(f => {
@@ -250,7 +250,9 @@ function insertImages(view: EditorView, files: FileList) {
     const alt = (f.name || 'image').replace(/[\[\]]/g, '').replace(/\.\w+$/, '')
     return { f, token, preview, md: `![${alt}](${token})` }
   })
-  view.dispatch(view.state.replaceSelection(inserts.map(i => i.md).join('\n')))
+  const md = inserts.map(i => i.md).join('\n')
+  if (at == null) view.dispatch(view.state.replaceSelection(md))
+  else insertOnOwnLine(view, at, md)
   for (const { f, token, preview } of inserts)
     uploadImage(f).then(url => {
       localImages.set(url, preview)
@@ -264,6 +266,110 @@ function insertImages(view: EditorView, files: FileList) {
     })
   return true
 }
+
+/** Inserts dropped markdown at `at` on line(s) of its own, rather than splitting a word or sentence inline. */
+function insertOnOwnLine(view: EditorView, at: number, md: string) {
+  const line = view.state.doc.lineAt(at)
+  // Splitting a line between words: the space there goes, not onto the start of the next line.
+  const before = line.text.slice(0, at - line.from), after = line.text.slice(at - line.from)
+  const from = before.trim() ? line.from + before.trimEnd().length : at
+  const to = after.trim() ? line.to - after.trimStart().length : at
+  const insert = (from > line.from ? '\n' : '') + md + (to < line.to ? '\n' : '')
+  view.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, userEvent: 'input.drop' })
+  view.focus()
+}
+
+/** A drag that carries files from outside the page (the desktop, a file manager). */
+const draggingFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files')
+
+/**
+ * Where something dropped at the pointer lands. Anywhere over the document area counts, not just
+ * the text: the margins map to the nearest line, the space below the text to its end.
+ * Null outside the document area (sidebar, header).
+ */
+function dropPos(view: EditorView, e: DragEvent): number | null {
+  if (!(e.target instanceof Element) || !e.target.closest('main') || e.target.closest('header')) return null
+  const r = view.contentDOM.getBoundingClientRect()
+  if (e.clientY >= r.bottom) return view.state.doc.length
+  if (e.clientY < r.top) return 0
+  return view.posAtCoords({ x: Math.min(Math.max(e.clientX, r.left + 1), r.right - 1), y: e.clientY }, false)
+}
+
+/**
+ * An image dragged from another web page arrives as its URL (and HTML), not as a file. Only
+ * https images are taken, linked where they are (the page's CSP allows https images).
+ */
+function droppedImage(data: DataTransfer) {
+  const url = data.getData('text/uri-list').split(/\r?\n/).find(l => l && !l.startsWith('#'))
+  if (!url?.startsWith('https://')) return null
+  const img = new DOMParser().parseFromString(data.getData('text/html'), 'text/html').querySelector('img')
+  if (!img || (img.src !== url && img.getAttribute('src') !== url)) return null // a dragged link or text, not an image
+  const src = url.replace(/[()\s]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'))
+  return `![${img.alt.replace(/[\[\]\n]/g, '')}](${src})`
+}
+
+const dragEvents = ['dragstart', 'dragenter', 'dragover', 'dragleave', 'drop', 'dragend'] as const
+
+/**
+ * Dropping image files anywhere over the document inserts them at the drop caret. Listens on the
+ * window in the capture phase, ahead of CodeMirror, whose own drop handling only sees drops on
+ * the text itself (not on images, the margins or the space below the text, where the browser
+ * would open the file instead, leaving the document) and would insert a file's bytes as text.
+ */
+const fileDrops = ViewPlugin.fromClass(class {
+  view: EditorView
+  caret: HTMLElement | null = null
+  fromPage = false
+  constructor(view: EditorView) {
+    this.view = view
+    for (const t of dragEvents) window.addEventListener(t, this, true)
+  }
+  destroy() {
+    for (const t of dragEvents) window.removeEventListener(t, this, true)
+    this.showCaret(null)
+  }
+  handleEvent(e: DragEvent) {
+    if (e.type === 'dragstart') this.fromPage = true // moving text or images within the document is CodeMirror's
+    if (e.type === 'dragend') this.fromPage = false
+    if (e.type === 'dragend' || (e.type === 'dragleave' && !e.relatedTarget)) return this.showCaret(null)
+    if (!draggingFiles(e)) {
+      if (e.type === 'drop' && !this.fromPage) this.dropImageLink(e)
+      return
+    }
+    if (e.type === 'dragleave') return
+    // Never let the browser open a file dropped on the page: it would navigate away from the document.
+    e.preventDefault()
+    const pos = dropPos(this.view, e)
+    if (e.type !== 'drop') {
+      e.dataTransfer!.dropEffect = pos == null ? 'none' : 'copy'
+      return this.showCaret(pos)
+    }
+    this.showCaret(null)
+    const files = e.dataTransfer!.files
+    if (!files.length) return this.dropImageLink(e) // Firefox: an image from a web page, as a file promise
+    if (pos == null) return
+    const images = insertImages(this.view, files, pos)
+    if (!images || Array.from(files).some(f => !f.type.startsWith('image/'))) notice('Only images can be added', 3000)
+  }
+  dropImageLink(e: DragEvent) {
+    const md = e.dataTransfer && droppedImage(e.dataTransfer)
+    const pos = md ? dropPos(this.view, e) : null
+    if (!md || pos == null) return
+    e.preventDefault()
+    insertOnOwnLine(this.view, pos, md)
+  }
+  showCaret(pos: number | null) {
+    const at = pos == null ? null : this.view.coordsAtPos(pos)
+    if (!at) {
+      this.caret?.remove()
+      this.caret = null
+      return
+    }
+    this.caret ??= this.view.scrollDOM.appendChild(Object.assign(document.createElement('div'), { className: 'cm-fileDropCursor' }))
+    const outer = this.view.scrollDOM.getBoundingClientRect()
+    Object.assign(this.caret.style, { left: at.left - outer.left + 'px', top: at.top - outer.top + 'px', height: at.bottom - at.top + 'px' })
+  }
+})
 
 function pasteLink(view: EditorView, text: string) {
   const sel = view.state.selection.main
@@ -330,6 +436,8 @@ const extensions = [
   sync.extension(),
   new LanguageSupport(markdown),
   livePreview(openLink),
+  fileDrops,
+  dropCursor(), // for text dragged within the editor; file drags draw their own caret
   undoHistory(),
   keymap.of([
     { key: 'Enter', run: v => tableEnter(v) || enter(v) },
@@ -352,12 +460,6 @@ const extensions = [
       const text = data.getData('text/plain').trim()
       if (/^https?:\/\/\S+$/.test(text)) { pasteLink(view, text); return true }
       return false
-    },
-    drop(e, view) {
-      if (!e.dataTransfer?.files.length) return false
-      const pos = view.posAtCoords({ x: e.clientX, y: e.clientY })
-      if (pos != null) view.dispatch({ selection: { anchor: pos } })
-      return insertImages(view, e.dataTransfer.files)
     },
   }),
   EditorView.updateListener.of(u => {

@@ -73,6 +73,7 @@ body.offline #status { display: inline; }
 #editor .cm-content { padding: 0; caret-color: var(--text); }
 #editor .cm-line { padding: 0; }
 #editor .cm-placeholder { color: var(--muted); }
+#editor .cm-dropCursor, #editor .cm-fileDropCursor { position: absolute; width: 0; border-left: 2px solid var(--accent); margin-left: -1px; pointer-events: none; }
 #editor .cm-editor ::selection, #editor .cm-editor .cm-line::selection { background: var(--sel) !important; }
 #editor .cm-h1 { font-size: 2em; font-weight: 700; line-height: 1.3; padding-top: .4em !important; }
 #editor .cm-h2 { font-size: 1.5em; font-weight: 700; line-height: 1.3; padding-top: .5em !important; }
