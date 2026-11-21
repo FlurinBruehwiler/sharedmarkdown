@@ -34,12 +34,23 @@ sw.addEventListener('install', e => e.waitUntil((async () => {
   const cache = await caches.open(CACHE)
   const shell = await fetch(SHELL, { cache: 'no-cache' })
   if (!shell.ok) throw new Error('shell ' + shell.status)
-  // The bundle this page uses: fingerprinted and immutable, so the HTTP cache copy (if any) is right.
+  // The bundle this page uses and the chunks it imports up front (language parsers load later, on
+  // demand, and are cached then). All are content-addressed, so the HTTP cache copy (if any) is right.
   const js = /src="(\/assets\/[^"]+\.js)"/.exec(await shell.clone().text())?.[1]
-  if (js) await cache.add(js)
+  if (js) await precacheModule(cache, new URL(js, sw.location.origin).href)
   await cache.put(SHELL, shell)
   await sw.skipWaiting() // nothing in the old worker is worth waiting for: take over at once
 })()))
+
+async function precacheModule(cache: Cache, url: string, seen = new Set<string>()): Promise<void> {
+  if (seen.has(url)) return
+  seen.add(url)
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(url + ' ' + res.status)
+  await cache.put(url, res.clone())
+  const imports = [...(await res.text()).matchAll(/(?:from|import)\s*"(\.\.?\/[^"]+\.js)"/g)].map(m => new URL(m[1], url).href)
+  await Promise.all(imports.map(i => precacheModule(cache, i, seen)))
+}
 
 sw.addEventListener('activate', e => e.waitUntil((async () => {
   for (const name of await caches.keys())

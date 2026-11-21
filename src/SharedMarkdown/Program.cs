@@ -91,6 +91,13 @@ app.UseAuthorization();
 app.UseAntiforgery();
 
 app.MapGet("/healthz", async (AppDb db) => await db.Database.CanConnectAsync() ? Results.Text("ok") : Results.StatusCode(503));
+// Code-split chunks are named by their content (esbuild), so they never change: cache them for good.
+app.Use((ctx, next) =>
+{
+    if (ctx.Request.Path.StartsWithSegments("/assets/chunks"))
+        ctx.Response.OnStarting(() => { ctx.Response.Headers.CacheControl = "public, max-age=31536000, immutable"; return Task.CompletedTask; });
+    return next(ctx);
+});
 app.MapStaticAssets();
 app.Services.GetRequiredService<AppShell>().Load(app);
 app.MapDocuments();

@@ -1,9 +1,11 @@
 import { EditorSelection, EditorState, type ChangeSpec, type Transaction } from '@codemirror/state'
 import { EditorView, dropCursor, keymap, placeholder, type Command } from '@codemirror/view'
 import { history as undoHistory, defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands'
-import { Language, LanguageSupport } from '@codemirror/language'
+import { HighlightStyle, Language, LanguageDescription, ParseContext, syntaxHighlighting } from '@codemirror/language'
 import { markdownLanguage, insertNewlineContinueMarkupCommand, deleteMarkupBackward } from '@codemirror/lang-markdown'
-import type { DelimiterType, InlineContext, MarkdownConfig, MarkdownParser } from '@lezer/markdown'
+import { languages } from '@codemirror/language-data'
+import { tags as t } from '@lezer/highlight'
+import { parseCode, type DelimiterType, type InlineContext, type MarkdownConfig, type MarkdownParser } from '@lezer/markdown'
 import { deleteSelectedImage, livePreview } from './livepreview'
 import { blankBefore, insertTable, tableArrow, tableEnter } from './table'
 import { slashMenu } from './slash'
@@ -41,9 +43,33 @@ const Highlight: MarkdownConfig = {
   }],
 }
 
-// Same language data as markdownLanguage, so its commands keep working (insertNewlineContinueMarkup
-// checks markdownLanguage.isActiveAt). Its parser is typed as a plain lezer Parser but is a MarkdownParser.
-export const markdown = new Language(markdownLanguage.data, (markdownLanguage.parser as MarkdownParser).configure([Highlight]), [], 'markdown')
+// A fenced block's language (```js) loads its parser on first use, as a separate chunk; the block is
+// reparsed once it arrives. Without a known language the block stays plain.
+const codeParser = (info: string) => {
+  const lang = info && LanguageDescription.matchLanguageName(languages, info, true)
+  if (!lang) return null
+  return lang.support ? lang.support.language.parser : ParseContext.getSkippingParser(lang.load())
+}
+
+// GFM plus ==highlight== and code languages. Same language data as markdownLanguage, so its commands keep
+// working (insertNewlineContinueMarkup checks markdownLanguage.isActiveAt). lang-markdown's markdown() would
+// do this too, but it bundles the HTML, CSS and JavaScript parsers for inline HTML.
+export const markdown = new Language(markdownLanguage.data,
+  (markdownLanguage.parser as MarkdownParser).configure([Highlight, parseCode({ codeParser })]), [], 'markdown')
+
+// Only code tokens: the markdown itself is styled by the live preview.
+const codeHighlight = HighlightStyle.define([
+  { tag: [t.keyword, t.controlKeyword, t.moduleKeyword, t.operatorKeyword, t.definitionKeyword, t.modifier, t.self], color: 'var(--hl-keyword)' },
+  { tag: [t.string, t.special(t.string), t.regexp, t.character, t.attributeValue], color: 'var(--hl-string)' },
+  { tag: [t.comment, t.lineComment, t.blockComment, t.docComment], color: 'var(--hl-comment)', fontStyle: 'italic' },
+  { tag: [t.number, t.integer, t.float, t.bool, t.null, t.atom, t.unit, t.constant(t.variableName)], color: 'var(--hl-number)' },
+  { tag: [t.function(t.variableName), t.function(t.propertyName), t.function(t.definition(t.variableName)), t.macroName], color: 'var(--hl-function)' },
+  { tag: [t.typeName, t.className, t.namespace, t.definition(t.typeName), t.annotation], color: 'var(--hl-type)' },
+  { tag: [t.tagName, t.angleBracket], color: 'var(--hl-tag)' },
+  { tag: [t.attributeName, t.propertyName, t.definition(t.propertyName)], color: 'var(--hl-property)' },
+  { tag: t.meta, color: 'var(--hl-comment)' },
+  { tag: t.invalid, color: 'var(--danger)' },
+])
 
 export const wrap = (marker: string): Command => view => {
   view.dispatch(view.state.changeByRange(r => {
@@ -193,7 +219,8 @@ export function createEditor(opts: EditorOptions) {
   const extensions = [
     slashItems,
     opts.sync.extension(),
-    new LanguageSupport(markdown),
+    markdown,
+    syntaxHighlighting(codeHighlight),
     livePreview(opts.openLink),
     fileDrops(images),
     dropCursor(), // for text dragged within the editor; file drags draw their own caret

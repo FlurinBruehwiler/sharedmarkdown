@@ -44,7 +44,7 @@
   <Target Name="IncludeClientOutput" AfterTargets="BuildClient">
     <ItemGroup>
       <ClientPublic Include="$(ClientDir)/public/**" />
-      <ClientOutput Include="wwwroot/assets/app.js;wwwroot/sw.js;@(ClientPublic->'wwwroot/%(RecursiveDir)%(Filename)%(Extension)')" />
+      <ClientOutput Include="wwwroot/assets/**;wwwroot/sw.js;@(ClientPublic->'wwwroot/%(RecursiveDir)%(Filename)%(Extension)')" />
       <Content Remove="@(ClientOutput)" />
       <Content Include="@(ClientOutput)" />
       <None Remove="app.html" />
