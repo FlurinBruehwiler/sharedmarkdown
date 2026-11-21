@@ -1,8 +1,10 @@
 <h1 align="center">SharedMarkdown</h1>
 
 <p align="center">
-  Online Markdown editor. <b>No accounts</b> or login. Easy sharing with collaborative editing. WYSIWYG editor inspired by Obsidian.
+  Online Markdown editor. <b>No accounts</b> or login. Easy sharing with collaborative editing. <br/>
+  WYSIWYG editor inspired by Obsidian. Full offline support.
 </p>
+
 
 <p align="center">
   <a href="https://sharedmarkdown.com"><b>sharedmarkdown.com</b></a>
