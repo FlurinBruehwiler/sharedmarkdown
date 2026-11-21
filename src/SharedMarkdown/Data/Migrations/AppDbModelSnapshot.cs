@@ -99,6 +99,9 @@ namespace SharedMarkdown.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ReadId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("State")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -115,6 +118,9 @@ namespace SharedMarkdown.Migrations
                     b.HasIndex("CreatedAt");
 
                     b.HasIndex("CreatorIp");
+
+                    b.HasIndex("ReadId")
+                        .IsUnique();
 
                     b.HasIndex("UpdatedAt");
 
