@@ -309,7 +309,8 @@ const draggingFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files'
  * the text: the margins map to the nearest line, the space below the text to its end.
  * Null outside the document area (sidebar, header).
  */
-function dropPos(view: EditorView, e: DragEvent): number | null {
+/** The text position nearest to a pointer anywhere over the document area (margins, space below the text). */
+function dropPos(view: EditorView, e: MouseEvent): number | null {
   if (!(e.target instanceof Element) || !e.target.closest('main') || e.target.closest('header')) return null
   const r = view.contentDOM.getBoundingClientRect()
   if (e.clientY >= r.bottom) return view.state.doc.length
@@ -511,6 +512,19 @@ function editorState(ro: boolean) {
 const view = new EditorView({ parent: $('#editor'), state: editorState(false) })
 // For automated tests (?debug): lets a test drive the editor even in a background tab.
 if (new URLSearchParams(location.search).has('debug')) Object.assign(window, { cmView: view })
+
+// Clicking the empty space around the text (below it, or in the margins) puts the cursor at the
+// nearest point of the text, like clicking below the last line of any editor.
+$('main').addEventListener('mousedown', e => {
+  if (e.button !== 0 || !(e.target instanceof Element)) return
+  if (e.target.closest('.cm-content, header, button, a, input, .cm-tbl, .cm-img, .sm-menu')) return
+  const pos = dropPos(view, e)
+  if (pos == null) return
+  e.preventDefault()
+  const anchor = e.shiftKey ? view.state.selection.main.anchor : pos
+  view.dispatch({ selection: { anchor, head: pos }, scrollIntoView: true, userEvent: 'select.pointer' })
+  view.focus()
+})
 // The filter keeps task checkboxes from changing the text, but the browser would still tick the box.
 $('#editor').addEventListener('click', e => {
   if (view.state.readOnly && e.target instanceof HTMLInputElement && e.target.type === 'checkbox') e.preventDefault()
