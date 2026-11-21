@@ -44,6 +44,18 @@ export class Rga {
     this.cache = null
   }
 
+  /** The state as runs in document order, the same format the server sends on join (Rga.cs Encode). */
+  encode(): StateRun[] {
+    const runs: StateRun[] = []
+    let run: StateRun | null = null
+    for (const it of this.items) {
+      const del = it.del ? 1 : 0
+      if (run && run[0] === it.c && run[1] + run[2].length === it.k && run[3] === del) run[2] += it.ch
+      else runs.push(run = [it.c, it.k, it.ch, del])
+    }
+    return runs
+  }
+
   text() {
     if (this.cache === null) {
       let s = ''

@@ -54,4 +54,23 @@ for (let round = 0; round < 200; round++) {
     assert.strictEqual(id ? a.posOf(id[0], id[1]) : a.posOf('', 0), pos)
   }
 }
+// encode() round-trips through load(), keeping ids and tombstones (an offline copy rejoins with them).
+for (let round = 0; round < 100; round++) {
+  const a = new Rga('a'), b = new Rga('b')
+  for (let step = 0; step < 30; step++) {
+    const r = rnd(2) ? a : b, other = r === a ? b : a
+    const t = r.text()
+    const p = rnd(t.length + 1), d = rnd(Math.min(4, t.length - p) + 1)
+    other.apply(r.splice(p, d, rnd(3) ? word() : ''))
+  }
+  const copy = new Rga('c')
+  copy.load(a.encode())
+  assert.deepStrictEqual(copy.encode(), a.encode())
+  assert.strictEqual(copy.text(), a.text())
+  // Edits made on the copy apply to the original.
+  const ops = copy.splice(rnd(copy.text().length + 1), 0, 'xy')
+  a.apply(ops)
+  assert.strictEqual(a.text(), copy.text(), 'encode round trip broke in round ' + round)
+}
+
 console.log('ok')
