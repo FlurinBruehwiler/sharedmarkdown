@@ -170,7 +170,7 @@ body.readonly #ro { display: inline; }
 /* "+" strips on the right and bottom edges add a column / row. */
 #editor .cm-tbl-edge {
   position: absolute; z-index: 1; display: grid; place-items: center; padding: 0; border: 1px dashed transparent; border-radius: 6px;
-  color: var(--muted); font-size: 14px; cursor: pointer; opacity: 0; transition: opacity .12s;
+  color: var(--muted); font: 14px/1 system-ui, sans-serif; cursor: pointer; opacity: 0; transition: opacity .12s;
 }
 #editor .cm-tbl-edge-col { top: .825em; bottom: .825em; right: -24px; width: 18px; }
 #editor .cm-tbl-edge-row { left: 0; right: 0; bottom: -10px; height: 16px; }
