@@ -1,5 +1,3 @@
-using System.Collections.Concurrent;
-using System.Net;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 
@@ -24,6 +22,16 @@ public class Limits
     public int SubmitsPerIpPerMinute { get; set; } = 1200;
     public int TitleLookupsPerIpPerMinute { get; set; } = 120;
     public int AdminLoginAttemptsPerIpPerHour { get; set; } = 10;
+
+    /// Why these limits can't be used, or null if they're fine.
+    public string? Validate()
+    {
+        int[] all = [DocumentsPerIpPerHour, MaxDocumentChars, MaxDocumentItems, UploadsPerIpPerHour, MaxUploadBytes, MaxImageDimension,
+            MaxConnectionsPerIp, JoinsPerIpPerMinute, SubmitsPerIpPerMinute, TitleLookupsPerIpPerMinute, AdminLoginAttemptsPerIpPerHour];
+        return all.Any(v => v < 1) ? "All values must be at least 1." : null;
+    }
+
+    public Limits Copy() => (Limits)MemberwiseClone();
 }
 
 public class LimitsService(IConfiguration config, IServiceScopeFactory scopes, ILogger<LimitsService> log)
@@ -46,6 +54,7 @@ public class LimitsService(IConfiguration config, IServiceScopeFactory scopes, I
 
     public async Task Save(Limits limits)
     {
+        if (limits.Validate() is { } error) throw new ArgumentException(error, nameof(limits));
         using var scope = scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDb>();
         var row = await db.Settings.FindAsync(Key);
@@ -62,85 +71,5 @@ public class LimitsService(IConfiguration config, IServiceScopeFactory scopes, I
         var db = scope.ServiceProvider.GetRequiredService<AppDb>();
         await db.Settings.Where(s => s.Key == Key).ExecuteDeleteAsync();
         _current = Defaults;
-    }
-}
-
-/// Per-IP fixed-window counters, live connection counts, and the IP block list.
-public class IpGuard(IServiceScopeFactory scopes)
-{
-    record struct Window(long Start, int Count);
-
-    readonly ConcurrentDictionary<(string Bucket, string Ip), Window> _windows = new();
-    readonly ConcurrentDictionary<string, int> _connections = new();
-    volatile HashSet<string> _blocked = [];
-
-    /// Counts one action; false if the IP already used `limit` actions in the current window.
-    public bool TryTake(string bucket, string ip, int limit, TimeSpan window)
-    {
-        var now = Environment.TickCount64;
-        var ms = (long)window.TotalMilliseconds;
-        while (true)
-        {
-            var key = (bucket, ip);
-            var w = _windows.GetOrAdd(key, _ => new Window(now, 0));
-            var next = now - w.Start >= ms ? new Window(now, 1) : w with { Count = w.Count + 1 };
-            if (next.Count > limit) return false;
-            if (_windows.TryUpdate(key, next, w)) return true;
-        }
-    }
-
-    /// Recent activity per IP for the dashboard.
-    public int Used(string bucket, string ip) => _windows.TryGetValue((bucket, ip), out var w) ? w.Count : 0;
-
-    public IEnumerable<(string Bucket, string Ip, int Count)> Activity() =>
-        _windows.Select(kv => (kv.Key.Bucket, kv.Key.Ip, kv.Value.Count));
-
-    public bool TryConnect(string ip, int limit)
-    {
-        while (true)
-        {
-            var n = _connections.GetOrAdd(ip, 0);
-            if (n >= limit) return false;
-            if (_connections.TryUpdate(ip, n + 1, n)) return true;
-        }
-    }
-
-    public void Disconnect(string ip) => _connections.AddOrUpdate(ip, 0, (_, n) => Math.Max(0, n - 1));
-
-    public int Connections => _connections.Values.Sum();
-
-    public bool IsBlocked(string ip) => _blocked.Contains(ip);
-
-    public async Task LoadBlocked()
-    {
-        using var scope = scopes.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDb>();
-        _blocked = (await db.BlockedIps.Select(b => b.Ip).ToListAsync()).ToHashSet();
-    }
-
-    /// Drops expired windows and idle connection entries so memory doesn't grow with every IP ever seen.
-    public void Prune()
-    {
-        var now = Environment.TickCount64;
-        foreach (var (key, w) in _windows)
-            if (now - w.Start > TimeSpan.FromHours(2).TotalMilliseconds) _windows.TryRemove(key, out _);
-        foreach (var (ip, n) in _connections)
-            if (n == 0) _connections.TryRemove(new KeyValuePair<string, int>(ip, 0));
-    }
-
-    public static string IpOf(HttpContext? ctx)
-    {
-        var ip = ctx?.Connection.RemoteIpAddress;
-        if (ip is null) return "unknown";
-        if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
-        if (IPAddress.IsLoopback(ip)) return ip.ToString();
-        // Group IPv6 clients by /64: one household or server usually gets a whole /64.
-        if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
-        {
-            var bytes = ip.GetAddressBytes();
-            Array.Clear(bytes, 8, 8);
-            return new IPAddress(bytes) + "/64";
-        }
-        return ip.ToString();
     }
 }

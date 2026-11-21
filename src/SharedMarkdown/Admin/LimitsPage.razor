@@ -41,20 +41,18 @@
 
     void Load()
     {
-        _model = Copy(Limits.Current);
+        _model = Limits.Current.Copy();
         _defaults = Limits.Defaults;
     }
 
-    static Limits Copy(Limits l) => System.Text.Json.JsonSerializer.Deserialize<Limits>(System.Text.Json.JsonSerializer.Serialize(l))!;
-
     async Task Save()
     {
-        if (typeof(Limits).GetProperties().Any(p => (int)p.GetValue(_model)! < 1))
+        if (_model.Validate() is { } error)
         {
-            _status = "All values must be at least 1.";
+            _status = error;
             return;
         }
-        await Limits.Save(Copy(_model));
+        await Limits.Save(_model.Copy());
         _status = "Saved.";
     }
 

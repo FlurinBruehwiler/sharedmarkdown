@@ -2,7 +2,8 @@ namespace SharedMarkdown.Admin;
 
 static class Fmt
 {
-    static readonly TimeZoneInfo Zurich = TimeZoneInfo.FindSystemTimeZoneById("Europe/Zurich");
+    /// Times are shown in Swiss time; hosts without time zone data (no tzdata) fall back to UTC.
+    static readonly TimeZoneInfo Zurich = TimeZoneInfo.TryFindSystemTimeZoneById("Europe/Zurich", out var tz) ? tz : TimeZoneInfo.Utc;
 
     public static string Bytes(long n) => n switch
     {
