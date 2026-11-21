@@ -20,8 +20,8 @@ public static class DocumentEndpoints
 
         app.MapGet("/", (HttpContext ctx, AppShell shell) => shell.Serve(ctx));
         app.MapGet("/{id}", (string id, HttpContext ctx, AppShell shell) =>
-            DocIds.EditId().IsMatch(id) ? shell.Serve(ctx) : Results.NotFound().ExecuteAsync(ctx));
+            DocIds.EditId().IsMatch(id) ? shell.ServeDocument(ctx, id, null) : Results.NotFound().ExecuteAsync(ctx));
         app.MapGet("/r/{readId}", (string readId, HttpContext ctx, AppShell shell) =>
-            DocIds.ReadId().IsMatch(readId) ? shell.Serve(ctx) : Results.NotFound().ExecuteAsync(ctx));
+            DocIds.ReadId().IsMatch(readId) ? shell.ServeDocument(ctx, null, readId) : Results.NotFound().ExecuteAsync(ctx));
     }
 }
