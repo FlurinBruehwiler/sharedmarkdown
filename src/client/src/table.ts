@@ -93,6 +93,13 @@ export function formatTable(rows: string[][], aligns: Align[]) {
 const delimFor = (a: Align, n = 3) =>
   a === 'c' ? ':' + '-'.repeat(Math.max(1, n - 2)) + ':' : a === 'r' ? '-'.repeat(Math.max(2, n - 1)) + ':' : a === 'l' ? ':' + '-'.repeat(Math.max(2, n - 1)) : '-'.repeat(Math.max(3, n))
 
+/** A cell's markdown as shown while it is edited: a `<br>` is a real line break. */
+export const cellShown = (raw: string) => raw.replace(/<br\s*\/?>/gi, '\n')
+/** And back: what was typed into a cell, as cell markdown. */
+export const cellStored = (typed: string) => escapeCell(typed.replace(/\u200b/g, '').replace(/\r?\n/g, '<br>'))
+// The browser can't put the caret after a line break that ends the text: keep an invisible character after it.
+const editText = (raw: string) => { const shown = cellShown(raw); return shown.endsWith('\n') ? shown + '\u200b' : shown }
+
 /** Pipes typed into a cell would split it: escape every unescaped one. */
 export const escapeCell = (s: string) => s.replace(/\r?\n/g, ' ').replace(/(^|[^\\])\|/g, '$1\\|').replace(/(^|[^\\])\|/g, '$1\\|')
 
@@ -467,7 +474,7 @@ class TableWidget extends WidgetType {
       if (td === active && sameShape) {
         // Being edited: only touch it if the text changed underneath (someone else, or undo).
         // The source stores cells trimmed, so a space just typed at either end isn't a change.
-        if ((td.textContent ?? '').trim() !== cell.raw) setTextKeepingCaret(td, cell.raw)
+        if (cellStored(td.textContent ?? '').trim() !== cell.raw) setTextKeepingCaret(td, editText(cell.raw))
         continue
       }
       td.classList.remove('cm-tbl-raw')
@@ -521,7 +528,7 @@ function focusCell(wrap: TableDOM, r: number, c: number, caret: Caret = 'end', s
   td.focus({ preventScroll: false })
   // `shown` keeps spaces typed at the cell's edges, which the stored (trimmed) text doesn't have.
   const stored = wrap.widget.spec.rows[r][c].raw
-  const raw = shown !== undefined && shown.trim() === stored ? shown : stored
+  const raw = shown !== undefined && cellStored(shown).trim() === stored ? shown : editText(stored)
   if (td.textContent !== raw) td.textContent = raw
   td.classList.add('cm-tbl-raw')
   placeCaret(td, caret === 'all' ? 'all' : caret === 'start' ? 0 : caret === 'end' ? raw.length : caret)
@@ -608,6 +615,30 @@ function deleteRect(wrap: TableDOM, rect: Rect) {
   ops.clear(wrap, rect) // everything selected also just clears: tables aren't deleted this way
 }
 
+/** Copied cells, like Obsidian: a markdown table (the first selected row as its header), or one cell's text. */
+export function copiedCells(rows: string[][], aligns: Align[]) {
+  return rows.length === 1 && rows[0].length === 1 ? cellShown(rows[0][0]) : formatTable(rows, aligns)
+}
+
+const escapeHtml = (s: string) => s.replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]!)
+
+function copyCells(wrap: TableDOM, e: ClipboardEvent) {
+  if (wrap.rect && !e.defaultPrevented) copyRect(wrap, wrap.rect, e)
+}
+
+function cutCells(wrap: TableDOM, e: ClipboardEvent) {
+  if (!wrap.rect || e.defaultPrevented) return
+  copyRect(wrap, wrap.rect, e)
+  ops.clear(wrap, wrap.rect)
+}
+
+// With cells selected the table itself has focus, which isn't editable: browsers may send copy/cut to the body.
+const selectedTable = () => document.activeElement?.classList.contains('cm-tbl') ? document.activeElement as TableDOM : null
+if (typeof document !== 'undefined') {
+  document.addEventListener('copy', e => { const w = selectedTable(); if (w) copyCells(w, e) })
+  document.addEventListener('cut', e => { const w = selectedTable(); if (w) cutCells(w, e) })
+}
+
 function copyRect(wrap: TableDOM, rect: Rect, e: ClipboardEvent) {
   const rows: string[][] = []
   for (let r = rect.r1; r <= rect.r2; r++) {
@@ -615,7 +646,11 @@ function copyRect(wrap: TableDOM, rect: Rect, e: ClipboardEvent) {
     for (let c = rect.c1; c <= rect.c2; c++) row.push(wrap.widget.spec.rows[r][c].raw)
     rows.push(row)
   }
-  e.clipboardData?.setData('text/plain', rows.map(r => r.join('\t')).join('\n'))
+  const aligns = wrap.widget.spec.aligns.slice(rect.c1, rect.c2 + 1)
+  e.clipboardData?.setData('text/plain', copiedCells(rows, aligns))
+  // Spreadsheets and mail programs paste this as a real table.
+  e.clipboardData?.setData('text/html', '<table>' + rows.map((row, r) =>
+    '<tr>' + row.map(cell => { const tag = r === 0 && rows.length > 1 ? 'th' : 'td'; return `<${tag}>${escapeHtml(cellShown(cell)).replace(/\n/g, '<br>')}</${tag}>` }).join('') + '</tr>').join('') + '</table>')
   e.preventDefault()
 }
 
@@ -834,9 +869,9 @@ function attach(wrap: TableDOM, addCol: HTMLButtonElement, addRow: HTMLButtonEle
     if (!td.classList.contains('cm-tbl-raw')) {
       const visible = caretOffset(td)
       const raw = wrap.widget.spec.rows[p.r]?.[p.c]?.raw ?? ''
-      td.textContent = raw
+      td.textContent = editText(raw)
       td.classList.add('cm-tbl-raw')
-      placeCaret(td, rawOffset(raw, visible))
+      placeCaret(td, rawOffset(cellShown(raw), visible))
     }
     placeGrips(p.r, p.c)
   })
@@ -855,9 +890,11 @@ function attach(wrap: TableDOM, addCol: HTMLButtonElement, addRow: HTMLButtonEle
     const td = cellOf(e.target)
     if (!td) return
     const { r, c } = posOf(td)
-    const typed = td.textContent ?? ''
-    const text = escapeCell(typed)
-    if (text !== typed) setTextKeepingCaret(td, text)
+    let typed = td.textContent ?? ''
+    // Backspace over the invisible character after a final line break removes the line break.
+    if (e instanceof InputEvent && e.inputType === 'deleteContentBackward' && typed.endsWith('\n')) typed = typed.slice(0, -1)
+    const text = cellStored(typed)
+    if (editText(text) !== typed || typed !== td.textContent) setTextKeepingCaret(td, editText(text))
     run(wrap, t => cellChange(t, r, c, text), null, 'input.type')
     trackCell(wrap, r, c)
   })
@@ -867,12 +904,29 @@ function attach(wrap: TableDOM, addCol: HTMLButtonElement, addRow: HTMLButtonEle
     if (!td) return
     e.preventDefault()
     const text = e.clipboardData?.getData('text/plain') ?? ''
-    document.execCommand('insertText', false, text.replace(/\r?\n/g, ' '))
+    insertInCell(td, text.replace(/\r\n?/g, '\n'))
   })
-  wrap.addEventListener('copy', e => { if (wrap.rect) copyRect(wrap, wrap.rect, e) })
-  wrap.addEventListener('cut', e => { if (wrap.rect) { copyRect(wrap, wrap.rect, e); ops.clear(wrap, wrap.rect); setRect(wrap, null) } })
+  wrap.addEventListener('copy', e => copyCells(wrap, e))
+  wrap.addEventListener('cut', e => cutCells(wrap, e))
 
   wrap.addEventListener('keydown', e => onKey(wrap, e))
+}
+
+/** Replaces the selection in the cell's text with `text` (execCommand would insert a <br> element for a line break). */
+function insertInCell(td: HTMLElement, text: string) {
+  const sel = getSelection()
+  const value = td.textContent ?? ''
+  let start = value.length, end = value.length
+  if (sel?.rangeCount && td.contains(sel.anchorNode)) {
+    const range = sel.getRangeAt(0), before = document.createRange()
+    before.selectNodeContents(td)
+    before.setEnd(range.startContainer, range.startOffset)
+    start = before.toString().length
+    end = start + range.toString().length
+  }
+  td.textContent = value.slice(0, start) + text + value.slice(end)
+  placeCaret(td, start + text.length)
+  td.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
 function wrapInCell(td: HTMLElement, marker: string) {
@@ -885,6 +939,11 @@ function wrapInCell(td: HTMLElement, marker: string) {
 function onKey(wrap: TableDOM, e: KeyboardEvent) {
   const w = wrap.widget
   const modKey = isMac() ? e.metaKey : e.ctrlKey
+  if (modKey && !e.altKey) {
+    const k = e.key.toLowerCase()
+    if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(wrap.view); return }
+    if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redo(wrap.view); return }
+  }
 
   if (wrap.rect) {
     const rect = wrap.rect
@@ -909,16 +968,14 @@ function onKey(wrap: TableDOM, e: KeyboardEvent) {
   const td = cellOf(e.target)
   if (!td) return
   const { r, c } = posOf(td)
-  const text = td.textContent ?? ''
-  const at = caretOffset(td)
+  const text = (td.textContent ?? '').replace(/\u200b$/, '')
+  const at = Math.min(caretOffset(td), text.length)
   const sel = getSelection()
   const collapsed = !sel || sel.isCollapsed
   const go = (nr: number, nc: number, caret: Caret = 'end') => { e.preventDefault(); focusCell(wrap, nr, nc, caret) }
 
   if (modKey && !e.altKey) {
     const k = e.key.toLowerCase()
-    if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(wrap.view); return }
-    if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redo(wrap.view); return }
     if (k === 'b') { e.preventDefault(); wrapInCell(td, '**'); return }
     if (k === 'i') { e.preventDefault(); wrapInCell(td, '*'); return }
     if (k === 'h' && e.shiftKey) { e.preventDefault(); wrapInCell(td, '=='); return }
@@ -937,7 +994,7 @@ function onKey(wrap: TableDOM, e: KeyboardEvent) {
       e.preventDefault(); return
     case 'Enter':
       e.preventDefault()
-      if (e.shiftKey) { document.execCommand('insertText', false, '<br>'); return }
+      if (e.shiftKey) { insertInCell(td, '\n'); return }
       if (r < w.rows - 1) return go(r + 1, c)
       ops.insertRow(wrap, w.rows, c)
       return

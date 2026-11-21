@@ -4,7 +4,7 @@ import assert from 'node:assert'
 import { ChangeSet, Text, type ChangeSpec } from '@codemirror/state'
 import {
   splitRow, readTable, escapeCell, cellChange, insertColChanges, deleteColsChanges, insertRowChange, deleteRowsChanges,
-  swapColsChanges, alignChange, formatTable, rawOffset, blankBefore,
+  swapColsChanges, alignChange, formatTable, rawOffset, blankBefore, cellShown, cellStored, copiedCells,
 } from '../src/table'
 
 const doc = (...lines: string[]) => Text.of(lines)
@@ -91,4 +91,18 @@ test('blankBefore: only right after text', () => {
   assert.strictEqual(blankBefore(d, d.line(3).from), '')
   assert.strictEqual(blankBefore(d, 0), '')
   assert.strictEqual(blankBefore(d, d.line(4).from), '\n')
+})
+
+test('a <br> in a cell is a line break while editing, and back', () => {
+  assert.strictEqual(cellShown('one<br>two<br/>three'), 'one\ntwo\nthree')
+  assert.strictEqual(cellStored('one\ntwo'), 'one<br>two')
+  assert.strictEqual(cellStored('a | b\r\nc'), 'a \\| b<br>c')
+  assert.strictEqual(cellStored(cellShown('x<br>y')), 'x<br>y')
+})
+
+test('copied cells are a markdown table, or one cell\'s text', () => {
+  assert.strictEqual(copiedCells([['a<br>b']], ['']), 'a\nb')
+  assert.strictEqual(copiedCells([['Name', 'Qty'], ['Apples', '3']], ['', 'r']),
+    '| Name   | Qty |\n| ------ | --: |\n| Apples |   3 |')
+  assert.strictEqual(copiedCells([['x', 'y']], ['', '']), '| x   | y   |\n| --- | --- |')
 })
