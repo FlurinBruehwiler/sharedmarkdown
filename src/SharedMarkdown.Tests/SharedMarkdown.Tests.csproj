@@ -21,7 +21,7 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
-    <ProjectReference Include="../../src/SharedMarkdown/SharedMarkdown.csproj" />
+    <ProjectReference Include="../SharedMarkdown/SharedMarkdown.csproj" />
   </ItemGroup>
 
   <ItemGroup>

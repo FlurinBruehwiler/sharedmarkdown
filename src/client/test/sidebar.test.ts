@@ -1,4 +1,4 @@
-// titleOf (sidebar.ts) mirrors MarkdownTitle.cs; both are checked against tests/SharedMarkdown.Tests/fixtures/titles.json.
+// titleOf (sidebar.ts) mirrors MarkdownTitle.cs; both are checked against src/SharedMarkdown.Tests/fixtures/titles.json.
 import { test } from 'node:test'
 import assert from 'node:assert'
 import fs from 'node:fs'
@@ -23,6 +23,6 @@ test('titleOf', () => {
 })
 
 test('titleOf matches the shared server fixture', () => {
-  const shared: { markdown: string, title: string }[] = JSON.parse(fs.readFileSync('../../tests/SharedMarkdown.Tests/fixtures/titles.json', 'utf8'))
+  const shared: { markdown: string, title: string }[] = JSON.parse(fs.readFileSync('../SharedMarkdown.Tests/fixtures/titles.json', 'utf8'))
   for (const { markdown, title } of shared) assert.strictEqual(titleOf(markdown), title, JSON.stringify(markdown))
 })

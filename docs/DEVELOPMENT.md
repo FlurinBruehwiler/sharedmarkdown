@@ -60,10 +60,10 @@ The admin dashboard shows usage, lists documents and images (searchable, filtera
 
 ```bash
 cd src/client && npm run check && npm test
-dotnet test tests/SharedMarkdown.Tests
+dotnet test src/SharedMarkdown.Tests
 ```
 
-The .NET tests (`tests/SharedMarkdown.Tests`) replay `fixtures/rga.json`, random editing sessions recorded with the client's `rga.ts`, to check that `Rga.cs` integrates identically. Regenerate it after changing `rga.ts`:
+The .NET tests (`src/SharedMarkdown.Tests`) replay `fixtures/rga.json`, random editing sessions recorded with the client's `rga.ts`, to check that `Rga.cs` integrates identically. Regenerate it after changing `rga.ts`:
 
 ```bash
 cd src/client && npx esbuild test/make-rga-fixtures.ts --bundle --platform=node --format=esm --outfile=test/.out/make-rga-fixtures.mjs && node test/.out/make-rga-fixtures.mjs

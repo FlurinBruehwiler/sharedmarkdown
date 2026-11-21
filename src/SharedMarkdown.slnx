@@ -1,4 +1,4 @@
 <Solution>
   <Project Path="SharedMarkdown/SharedMarkdown.csproj" />
-  <Project Path="../tests/SharedMarkdown.Tests/SharedMarkdown.Tests.csproj" />
+  <Project Path="SharedMarkdown.Tests/SharedMarkdown.Tests.csproj" />
 </Solution>

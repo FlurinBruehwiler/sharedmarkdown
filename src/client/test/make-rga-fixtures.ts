@@ -1,4 +1,4 @@
-// Generates tests/SharedMarkdown.Tests/fixtures/rga.json: random multi-client editing sessions as the server
+// Generates src/SharedMarkdown.Tests/fixtures/rga.json: random multi-client editing sessions as the server
 // would receive them (op batches in arrival order, including resends and deletes of unknown ids), plus the
 // state and text the TypeScript RGA ends up with. The .NET tests replay the batches through Rga.cs and
 // require the same result, so the two implementations integrate identically.
@@ -74,7 +74,7 @@ for (let round = 0; round < 80; round++) {
 }
 
 if (!existsSync('src/rga.ts')) throw new Error('run this from src/client')
-const out = resolve('../../tests/SharedMarkdown.Tests/fixtures/rga.json')
+const out = resolve('../SharedMarkdown.Tests/fixtures/rga.json')
 mkdirSync(dirname(out), { recursive: true })
 writeFileSync(out, JSON.stringify({ generator: 'src/client/test/make-rga-fixtures.ts', cases }) + '\n')
 console.log(`wrote ${cases.length} cases to ${out}`)
