@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - 'master'
+
+jobs:
+  build:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '11.0.x'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: client/package-lock.json
+
+      - name: Test
+        run: cd client && npm ci && node test/rga.test.mjs
+
+      - name: Restore
+        run: dotnet restore ./SharedMarkdown.csproj -r linux-x64 -p:SelfContained=true
+
+      - name: Build
+        run: dotnet publish ./SharedMarkdown.csproj --configuration Release --no-restore --output ./ReleaseBuild -r linux-x64 --self-contained
+
+      - name: CopyToServer
+        uses: appleboy/scp-action@v1
+        with:
+          host: sharedmarkdown.com
+          key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          username: sharedmarkdown
+          source: "./ReleaseBuild"
+          target: "/opt/sharedmarkdown/releases/current"
+          rm: true
+
+      - name: Restart
+        uses: appleboy/ssh-action@v1
+        with:
+          host: sharedmarkdown.com
+          key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          username: sharedmarkdown
+          script: sudo systemctl restart sharedmarkdown

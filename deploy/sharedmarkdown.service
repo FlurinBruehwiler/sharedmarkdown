@@ -1,0 +1,18 @@
+# /etc/systemd/system/sharedmarkdown.service
+# The database lives outside the release folder so deploys never touch it.
+[Unit]
+Description=SharedMarkdown
+After=network.target
+
+[Service]
+User=sharedmarkdown
+WorkingDirectory=/opt/sharedmarkdown/releases/current/ReleaseBuild
+ExecStart=/opt/sharedmarkdown/releases/current/ReleaseBuild/SharedMarkdown --urls http://127.0.0.1:5000
+Environment=DataDir=/opt/sharedmarkdown/data
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Restart=always
+# The app flushes documents to SQLite on shutdown.
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

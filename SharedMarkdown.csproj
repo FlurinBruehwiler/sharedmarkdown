@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ClientDir>$(MSBuildProjectDirectory)/client</ClientDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Remove="client/**;dist/**" />
+    <None Remove="client/**;dist/**" />
+    <Compile Remove="client/**" />
+    <ClientSource Include="client/src/**;client/index.html;client/build.mjs;client/package.json" />
+  </ItemGroup>
+
+  <!-- The frontend is bundled into dist/ by client/build.mjs and served from memory by Assets.cs. -->
+  <Target Name="NpmInstall" BeforeTargets="BuildClient" Condition="!Exists('$(ClientDir)/node_modules')">
+    <Exec Command="npm ci" WorkingDirectory="$(ClientDir)" />
+  </Target>
+  <Target Name="BuildClient" BeforeTargets="Build" Inputs="@(ClientSource)" Outputs="dist/index.html">
+    <Exec Command="node build.mjs" WorkingDirectory="$(ClientDir)" />
+  </Target>
+  <Target Name="PublishClient" AfterTargets="ComputeResolvedFilesToPublishList" DependsOnTargets="BuildClient">
+    <ItemGroup>
+      <ClientDist Include="dist/**" />
+      <ResolvedFileToPublish Include="@(ClientDist)" RelativePath="dist/%(RecursiveDir)%(Filename)%(Extension)" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+
+</Project>
