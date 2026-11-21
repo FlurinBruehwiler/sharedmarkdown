@@ -2,23 +2,21 @@
 // cell, which shows its own markdown while you're in it. Every edit is a minimal text change on the
 // markdown source (one cell's text, one line, one `| x ` segment per row), never a rewrite of the
 // whole table, so collaborators editing other cells at the same time are never clobbered.
-import { StateField, type ChangeSpec, type EditorState, type Extension, type Line, type Range, type Text } from '@codemirror/state'
+import { Facet, StateField, type ChangeSpec, type EditorState, type Extension, type Line, type Range, type Text } from '@codemirror/state'
 import { Decoration, EditorView, WidgetType, type Command, type DecorationSet } from '@codemirror/view'
 import { syntaxTree } from '@codemirror/language'
 import { undo, redo, isolateHistory } from '@codemirror/commands'
 import type { SyntaxNode } from '@lezer/common'
-import { diff } from './rga'
+import { diff } from './text'
 
 type LinkHandler = (href: string) => void
-let openLink: LinkHandler = () => {}
+const linkHandler = Facet.define<LinkHandler, LinkHandler>({ combine: handlers => handlers[0] ?? (() => {}) })
 
 // ---------- source model ----------
 
-/** Column alignment from the delimiter row: left, center, right or default. */
-type Align = '' | 'l' | 'c' | 'r'
+export type Align = '' | 'l' | 'c' | 'r'
 /** A cell's content range (trimmed) and slot range (between the pipes), relative to its line. */
-export interface Cell { from: number, to: number, slotFrom: number, slotTo: number }
-/** A cell read from the document: also its line and text. */
+interface Cell { from: number, to: number, slotFrom: number, slotTo: number }
 interface SourceCell extends Cell { line: Line, text: string }
 /** A table's source. `rows[0]` is the header; the delimiter is `lines[1]`. */
 interface Table { from: number, to: number, lines: Line[], aligns: Align[], delim: Cell[], rows: SourceCell[][], cols: number }
@@ -27,7 +25,6 @@ interface Rect { r1: number, c1: number, r2: number, c2: number }
 
 const width = (s: string) => [...s].length
 
-/** Cells of one table row: content range (trimmed) and slot range (between the pipes), relative to the line. */
 export function splitRow(text: string): Cell[] {
   const cells: Cell[] = []
   let i = 0
@@ -58,16 +55,15 @@ const alignOf = (s: string): Align => {
 }
 
 /** The top-level Table node at or around `pos`, or null. Tables nested in quotes/lists stay raw text. */
-export function tableAt(state: EditorState, pos: number): SyntaxNode | null {
+function tableAt(state: EditorState, pos: number): SyntaxNode | null {
   for (const side of [1, -1] as const)
     for (let n: SyntaxNode | null = syntaxTree(state).resolveInner(pos, side); n; n = n.parent)
       if (n.name === 'Table') return n.parent?.name === 'Document' ? n : null
   return null
 }
 
-function readTable(state: EditorState, node: SyntaxNode): Table {
-  const doc = state.doc
-  const first = doc.lineAt(node.from), last = doc.lineAt(node.to)
+export function readTable(doc: Text, from: number, to: number): Table {
+  const first = doc.lineAt(from), last = doc.lineAt(to)
   const lines: Line[] = []
   for (let l = first.number; l <= last.number; l++) lines.push(doc.line(l))
   const cellsOf = (line: Line): SourceCell[] => splitRow(line.text).map(c => ({ ...c, line, text: line.text.slice(c.from, c.to) }))
@@ -78,7 +74,6 @@ function readTable(state: EditorState, node: SyntaxNode): Table {
   return { from: first.from, to: last.to, lines, aligns, delim, rows, cols: header.length }
 }
 
-/** Markdown for a table, columns padded to equal width and aligned like the delimiter row says. */
 export function formatTable(rows: string[][], aligns: Align[]) {
   const cols = Math.max(1, ...rows.map(r => r.length))
   const w: number[] = []
@@ -99,26 +94,24 @@ const delimFor = (a: Align, n = 3) =>
   a === 'c' ? ':' + '-'.repeat(Math.max(1, n - 2)) + ':' : a === 'r' ? '-'.repeat(Math.max(2, n - 1)) + ':' : a === 'l' ? ':' + '-'.repeat(Math.max(2, n - 1)) : '-'.repeat(Math.max(3, n))
 
 /** Pipes typed into a cell would split it: escape every unescaped one. */
-const escapeCell = (s: string) => s.replace(/\r?\n/g, ' ').replace(/(^|[^\\])\|/g, '$1\\|').replace(/(^|[^\\])\|/g, '$1\\|')
+export const escapeCell = (s: string) => s.replace(/\r?\n/g, ' ').replace(/(^|[^\\])\|/g, '$1\\|').replace(/(^|[^\\])\|/g, '$1\\|')
 
 // ---------- minimal edits ----------
 
 const lineOfRow = (t: Table, r: number) => t.lines[r === 0 ? 0 : r + 1]
 
 /** The change that sets cell (r, c) to `text`: only the differing characters inside that cell. */
-function cellChange(t: Table, r: number, c: number, text: string): ChangeSpec | null {
+export function cellChange(t: Table, r: number, c: number, text: string): ChangeSpec | null {
   const line = lineOfRow(t, r)
   if (!line) return null
   const cell = t.rows[r][c]
   if (!cell) {
-    // A short row: append the missing cells.
     const have = t.rows[r].length
     const missing = Array.from({ length: c - have }, () => '   |').join('')
     const endsWithPipe = /\|\s*$/.test(line.text)
     return { from: line.to, insert: (endsWithPipe ? '' : ' |') + missing + ` ${text} |` }
   }
   if (cell.from === cell.to) {
-    // Empty slot: keep a space on both sides of the content.
     const at = cell.slotFrom + (line.text[cell.slotFrom] === ' ' ? 1 : 0)
     const lead = line.text[cell.slotFrom] === ' ' ? '' : ' '
     const trail = at < cell.slotTo && line.text[at] === ' ' ? '' : ' '
@@ -130,18 +123,17 @@ function cellChange(t: Table, r: number, c: number, text: string): ChangeSpec | 
   return { from, to: from + d.d, insert: d.i }
 }
 
-/** An empty row whose cell slots line up with the delimiter row. */
 function emptyRow(t: Table) {
   return '|' + Array.from({ length: t.cols }, (_, c) => ' '.repeat(Math.max(2, (t.delim[c]?.slotTo ?? 4) - (t.delim[c]?.slotFrom ?? 0)))).join('|') + '|'
 }
 
-function insertRowChange(t: Table, at: number): ChangeSpec {
+export function insertRowChange(t: Table, at: number): ChangeSpec {
   // at = index of the new row (>= 1). Insert before that row's line, or after the last line.
   const before = t.lines[at + 1]
   return before ? { from: before.from, insert: emptyRow(t) + '\n' } : { from: t.to, insert: '\n' + emptyRow(t) }
 }
 
-function deleteRowsChanges(t: Table, rows: number[]): ChangeSpec[] {
+export function deleteRowsChanges(t: Table, rows: number[]): ChangeSpec[] {
   const set = new Set(rows)
   const changes: ChangeSpec[] = []
   if (set.has(0)) {
@@ -161,7 +153,7 @@ function deleteRowsChanges(t: Table, rows: number[]): ChangeSpec[] {
   return changes
 }
 
-function insertColChanges(t: Table, at: number): ChangeSpec[] {
+export function insertColChanges(t: Table, at: number): ChangeSpec[] {
   const changes: ChangeSpec[] = []
   t.lines.forEach((line, i) => {
     const cells = i === 1 ? t.delim : splitRow(line.text)
@@ -176,7 +168,7 @@ function insertColChanges(t: Table, at: number): ChangeSpec[] {
   return changes
 }
 
-function deleteColsChanges(t: Table, cols: number[]): ChangeSpec[] {
+export function deleteColsChanges(t: Table, cols: number[]): ChangeSpec[] {
   const changes: ChangeSpec[] = []
   for (const [i, line] of t.lines.entries()) {
     const cells = i === 1 ? t.delim : splitRow(line.text)
@@ -193,12 +185,12 @@ function deleteColsChanges(t: Table, cols: number[]): ChangeSpec[] {
   return changes
 }
 
-function swapRowsChanges(t: Table, a: number, b: number): ChangeSpec[] {
+export function swapRowsChanges(t: Table, a: number, b: number): ChangeSpec[] {
   const la = lineOfRow(t, a), lb = lineOfRow(t, b)
   return [{ from: la.from, to: la.to, insert: lb.text }, { from: lb.from, to: lb.to, insert: la.text }]
 }
 
-function swapColsChanges(t: Table, a: number, b: number): ChangeSpec[] {
+export function swapColsChanges(t: Table, a: number, b: number): ChangeSpec[] {
   const changes: ChangeSpec[] = []
   t.lines.forEach((line, i) => {
     const cells = i === 1 ? t.delim : splitRow(line.text)
@@ -210,7 +202,7 @@ function swapColsChanges(t: Table, a: number, b: number): ChangeSpec[] {
   return changes
 }
 
-function alignChange(t: Table, c: number, a: Align): ChangeSpec | null {
+export function alignChange(t: Table, c: number, a: Align): ChangeSpec | null {
   const cell = t.delim[c], line = t.lines[1]
   if (!cell || !line) return null
   const n = cell.to - cell.from
@@ -300,7 +292,7 @@ function renderInline(parts: Inline[], parent: HTMLElement) {
 }
 
 /** Visible-text offset -> offset in the cell's markdown, skipping markers (`**`, `*`, `` ` ``, `==`, `~~`, `\`). */
-function rawOffset(raw: string, visible: number) {
+export function rawOffset(raw: string, visible: number) {
   let seen = 0, i = 0
   while (i < raw.length && seen < visible) {
     if (raw.startsWith('**', i) || raw.startsWith('==', i) || raw.startsWith('~~', i) || raw.startsWith('__', i)) { i += 2; continue }
@@ -314,7 +306,6 @@ function rawOffset(raw: string, visible: number) {
 // ---------- the widget ----------
 
 interface CellSpec { raw: string, parts: Inline[] }
-/** What a rendered table shows. */
 interface TableSpec { rows: CellSpec[][], aligns: Align[] }
 
 /** Per-table UI state, kept on the root element so it survives re-renders. */
@@ -324,9 +315,7 @@ interface TableDOM extends HTMLDivElement {
   tableDOM: HTMLTableElement
   rowGrip: HTMLButtonElement
   colGrip: HTMLButtonElement
-  /** The cell being edited, if any. */
   editing: { r: number, c: number } | null
-  /** A rectangular selection of whole cells (drag, Shift+click, Shift+arrows). */
   rect: Rect | null
   /** Where the table started when last edited or focused, to find it again after a re-render. */
   from: number
@@ -352,13 +341,12 @@ function trackCell(wrap: TableDOM, r: number, c: number) {
   tracked = line && cell ? { view: wrap.view, pos: line.from + cell.slotFrom } : null
 }
 
-/** The cell at a tracked position, as a pending focus. `text` is what the cell showed (edge spaces included). */
 function focusTracked(view: EditorView, caret: Caret, text?: string) {
   if (!tracked || tracked.view !== view) return false
   const node = tableAt(view.state, tracked.pos)
   if (!node) return false
-  const t = readTable(view.state, node)
-  const lineIdx = t.lines.findIndex(l => tracked!.pos >= l.from && tracked!.pos <= l.to) // tracked is set: checked above
+  const t = readTable(view.state.doc, node.from, node.to)
+  const lineIdx = t.lines.findIndex(l => tracked!.pos >= l.from && tracked!.pos <= l.to)
   if (lineIdx < 0 || lineIdx === 1) return false
   const r = lineIdx === 0 ? 0 : lineIdx - 1
   const rel = tracked.pos - t.lines[lineIdx].from
@@ -367,7 +355,6 @@ function focusTracked(view: EditorView, caret: Caret, text?: string) {
   return true
 }
 
-/** Focuses the pending cell in the table at (or, if it moved, nearest to) the remembered position. */
 function applyPendingFocus(view: EditorView) {
   const p = pendingFocus
   if (!p || p.view !== view) return
@@ -439,7 +426,6 @@ class TableWidget extends WidgetType {
     queueMicrotask(() => { if (focusTracked(view, caret, text)) applyPendingFocus(view) })
   }
 
-  /** Renders the spec into the element, keeping the cell being edited (and its caret) untouched. */
   fill(wrap: TableDOM) {
     wrap.widget = this
     const { rows, aligns } = this.spec
@@ -500,7 +486,7 @@ function setTextKeepingCaret(td: HTMLElement, text: string) {
   if (sel?.rangeCount && td.contains(sel.anchorNode)) {
     const before = document.createRange()
     before.selectNodeContents(td)
-    before.setEnd(sel.anchorNode!, sel.anchorOffset) // anchorNode is set: the range count is non-zero
+    before.setEnd(sel.anchorNode!, sel.anchorOffset)
     const old = td.textContent ?? '', off = before.toString().length
     const d = diff(old, text)
     at = off <= d.p ? off : off >= d.p + d.d ? off - d.d + d.i.length : d.p + d.i.length
@@ -543,16 +529,14 @@ function focusCell(wrap: TableDOM, r: number, c: number, caret: Caret = 'end', s
 
 // ---------- operations ----------
 
-/** False in a read-only view (shared view-only link): tables are shown but can't be changed. */
 const canEdit = (view: EditorView) => !view.state.readOnly && view.state.facet(EditorView.editable)
 
-/** Reads the table this widget shows, from the current document. */
 function source(wrap: TableDOM): Table | null {
   const view = wrap.view
   let pos: number
   try { pos = view.posAtDOM(wrap) } catch { return null }
   const node = tableAt(view.state, pos)
-  return node ? readTable(view.state, node) : null
+  return node ? readTable(view.state.doc, node.from, node.to) : null
 }
 
 type Focus = { r: number, c: number, caret: 'start' | 'end' | 'all' }
@@ -640,14 +624,20 @@ function copyRect(wrap: TableDOM, rect: Rect, e: ClipboardEvent) {
 interface MenuItem { label?: string, sep?: true, section?: string, disabled?: boolean, danger?: boolean, check?: boolean, key?: string, run?: () => void }
 let menuEl: HTMLDivElement | null = null
 
+const closeOnOutsideClick = (e: MouseEvent) => { if (menuEl && !(e.target instanceof Node && menuEl.contains(e.target))) closeMenu() }
+
 function closeMenu() {
   menuEl?.remove()
   menuEl = null
+  removeEventListener('mousedown', closeOnOutsideClick, true)
+  removeEventListener('scroll', closeMenu, true)
   document.querySelectorAll('.cm-tbl-hl').forEach(el => el.classList.remove('cm-tbl-hl'))
 }
 
 function openMenu(at: { x: number, y: number }, items: MenuItem[], back?: () => void) {
   closeMenu()
+  addEventListener('mousedown', closeOnOutsideClick, true)
+  addEventListener('scroll', closeMenu, true)
   const m = document.createElement('div')
   m.className = 'sm-menu'
   m.setAttribute('role', 'menu')
@@ -681,17 +671,13 @@ function openMenu(at: { x: number, y: number }, items: MenuItem[], back?: () => 
   m.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true })
 }
 
-addEventListener('mousedown', e => { if (menuEl && !(e.target instanceof Node && menuEl.contains(e.target))) closeMenu() }, true)
-addEventListener('scroll', () => closeMenu(), true)
-
-const isMac = /Mac|iPhone|iPad/.test(navigator.platform)
-const mod = isMac ? '⌘' : 'Ctrl'
+const isMac = () => /Mac|iPhone|iPad/.test(navigator.platform)
 
 function rowItems(wrap: TableDOM, r: number): MenuItem[] {
   const w = wrap.widget, header = r === 0
   return [
     { label: 'Insert row above', disabled: header, run: () => ops.insertRow(wrap, r) },
-    { label: 'Insert row below', key: `${mod} Enter`, run: () => ops.insertRow(wrap, r + 1) },
+    { label: 'Insert row below', key: `${isMac() ? "⌘" : "Ctrl"} Enter`, run: () => ops.insertRow(wrap, r + 1) },
     { label: 'Move row up', disabled: r <= 1, run: () => ops.moveRow(wrap, r, -1) },
     { label: 'Move row down', disabled: header || r >= w.rows - 1, run: () => ops.moveRow(wrap, r, 1) },
     { sep: true },
@@ -732,7 +718,7 @@ function caretOffset(td: HTMLElement) {
   if (!sel?.rangeCount || !td.contains(sel.anchorNode)) return 0
   const range = document.createRange()
   range.selectNodeContents(td)
-  range.setEnd(sel.anchorNode!, sel.anchorOffset) // anchorNode exists: the range count is non-zero
+  range.setEnd(sel.anchorNode!, sel.anchorOffset)
   return range.toString().length
 }
 
@@ -821,7 +807,7 @@ function attach(wrap: TableDOM, addCol: HTMLButtonElement, addRow: HTMLButtonEle
     if (!td || !wrap.contains(td)) return
     const p = posOf(td)
     const link = e.target instanceof Element ? e.target.closest<HTMLElement>('.cm-tbl-link') : null
-    if (link && !td.classList.contains('cm-tbl-raw')) { e.preventDefault(); openLink(link.dataset.href!); return } // renderInline sets data-href
+    if (link && !td.classList.contains('cm-tbl-raw')) { e.preventDefault(); view.state.facet(linkHandler)(link.dataset.href!); return }
     if (e.shiftKey && wrap.editing) { e.preventDefault(); setRect(wrap, norm(wrap.editing, p)); wrap.focus(); return }
     dragFrom = p
   })
@@ -831,7 +817,6 @@ function attach(wrap: TableDOM, addCol: HTMLButtonElement, addRow: HTMLButtonEle
     if (!td) return
     const p = posOf(td)
     if (p.r === dragFrom.r && p.c === dragFrom.c && !wrap.rect) return
-    // Dragging across cells selects a rectangle of cells instead of text.
     e.preventDefault()
     getSelection()?.removeAllRanges()
     setRect(wrap, norm(dragFrom, p))
@@ -847,7 +832,6 @@ function attach(wrap: TableDOM, addCol: HTMLButtonElement, addRow: HTMLButtonEle
     try { wrap.from = wrap.view.posAtDOM(wrap) } catch { /* not attached */ }
     trackCell(wrap, p.r, p.c)
     if (!td.classList.contains('cm-tbl-raw')) {
-      // Switch the cell to its markdown, keeping the caret where it was clicked.
       const visible = caretOffset(td)
       const raw = wrap.widget.spec.rows[p.r]?.[p.c]?.raw ?? ''
       td.textContent = raw
@@ -900,9 +884,8 @@ function wrapInCell(td: HTMLElement, marker: string) {
 
 function onKey(wrap: TableDOM, e: KeyboardEvent) {
   const w = wrap.widget
-  const modKey = isMac ? e.metaKey : e.ctrlKey
+  const modKey = isMac() ? e.metaKey : e.ctrlKey
 
-  // A selected rectangle of cells.
   if (wrap.rect) {
     const rect = wrap.rect
     if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteRect(wrap, rect); return }
@@ -991,7 +974,7 @@ function buildTables(state: EditorState): DecorationSet {
   const decos: Range<Decoration>[] = []
   for (let n: SyntaxNode | null = syntaxTree(state).topNode.firstChild; n; n = n.nextSibling) {
     if (n.name !== 'Table') continue
-    const t = readTable(state, n)
+    const t = readTable(state.doc, n.from, n.to)
     if (t.lines.length < 2) continue
     const rowNodes = [n.getChild('TableHeader'), ...n.getChildren('TableRow')]
     const rows = t.rows.map((row, i) => Array.from({ length: t.cols }, (_, c): CellSpec =>
@@ -1029,12 +1012,11 @@ export function tableEnter(view: EditorView) {
   return true
 }
 
-/** Inserts a table (replacing from..to) and puts the caret into a cell of the rendered table. */
 export function insertTable(view: EditorView, from: number, to: number, rows: string[][], focus = { r: 0, c: 0 }) {
   const doc = view.state.doc
-  // A table needs a blank line before it (after a paragraph) and after it (or the next line becomes a row).
-  const before = doc.lineAt(from), after = doc.lineAt(to)
-  const lead = before.number > 1 && doc.line(before.number - 1).text.trim() && from === before.from ? '\n' : ''
+  // Text right after a table would become another row.
+  const after = doc.lineAt(to)
+  const lead = blankBefore(doc, from)
   const trail = after.number < doc.lines && doc.line(after.number + 1).text.trim() ? '\n' : ''
   const start = from + lead.length
   pendingFocus = { view, from: start, r: focus.r, c: focus.c, caret: 'all' }
@@ -1042,7 +1024,6 @@ export function insertTable(view: EditorView, from: number, to: number, rows: st
   applyPendingFocus(view)
 }
 
-/** ArrowUp/Down into a rendered table: focus its first (or last) row's first cell. */
 export const tableArrow = (forward: boolean): Command => view => {
   const { state } = view
   const sel = state.selection.main
@@ -1062,10 +1043,18 @@ export const tableArrow = (forward: boolean): Command => view => {
 }
 
 const trackEdits = EditorView.updateListener.of(u => {
-  if (tracked && tracked.view === u.view && u.docChanged) tracked.pos = u.changes.mapPos(tracked.pos, 1)
+  if (!tracked || tracked.view !== u.view || !u.docChanged) return
+  // After view.setState (another document) the position belongs to a document that is gone.
+  if (tracked.pos > u.startState.doc.length) tracked = null
+  else tracked.pos = u.changes.mapPos(tracked.pos, 1)
 })
 
-export function tables(linkHandler?: LinkHandler): Extension {
-  if (linkHandler) openLink = linkHandler
-  return [tableField, trackEdits]
+export function tables(openLink: LinkHandler): Extension {
+  return [linkHandler.of(openLink), tableField, trackEdits]
+}
+
+/** '\n' when `from` starts a line right after text: a table or `---` there would otherwise attach to it. */
+export function blankBefore(doc: Text, from: number) {
+  const line = doc.lineAt(from)
+  return line.number > 1 && from === line.from && doc.line(line.number - 1).text.trim() ? '\n' : ''
 }

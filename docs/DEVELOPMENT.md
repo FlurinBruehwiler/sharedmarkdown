@@ -20,8 +20,13 @@ Admin__Password=something dotnet run
 
 - **Backend** (ASP.NET Core, one process): SignalR hub `Documents/DocHub.cs`, SQLite via EF Core with migrations (`Data/`), images stored in SQLite (`/api/blobs`, served from `/b/{sha}`, processed in `Images/`), abuse limits in `Protection/`, admin dashboard in Blazor Server (`Admin/`), asset serving and backups in `Infrastructure/`. All under `src/SharedMarkdown/`.
 - **Real-time sync**: a hand-written RGA sequence CRDT over the markdown text, identical in `Documents/Rga.cs` and `src/client/src/rga.ts`. The server keeps a replica, writes it to SQLite every 2 s (`Documents/DocStore.cs`, `DocFlusher.cs`) and relays ops. Deleted characters are compacted away when a document that hasn't been edited for 7 days is loaded (visible characters keep their ids, so offline edits still apply). The hub's error strings and `Submit` results are the wire contract in `Documents/HubContract.cs`. Other people's cursors are sent as CRDT anchors and drawn as unlabeled carets.
-- **Frontend** (`src/client`): TypeScript (strict) + [CodeMirror 6](https://codemirror.net), no framework, bundled by esbuild. `livepreview.ts` does Obsidian-style live preview, `table.ts` the table widget and toolbar, `hub.ts` is a ~60-line typed SignalR client, `sync.ts` the sync glue.
-- **Offline**: `sw.ts` (service worker, `/sw.js`) serves the last seen page when the network fails (network first, so deploys still arrive at once) and caches the hashed bundle and `/b/` images. `local.ts` keeps each opened document's RGA state and unsent ops in IndexedDB (last 50 documents, plus any with unsent edits); without a connection a document opens from that copy, and the ops are merged through the normal rejoin when the hub reconnects. Edits left in documents that aren't open are sent over a second connection after reconnecting (`offline.ts`).
+- **Frontend** (`src/client/src`): TypeScript (strict) + [CodeMirror 6](https://codemirror.net), no framework, bundled by esbuild.
+  - `main.ts`: wiring (hub, sync, editor, sidebar), navigation, version reload, notices, share button, theme toggle, boot.
+  - `editor.ts`: the CodeMirror setup: extensions, keymap and commands, read-only mode, slash-menu items, click-to-place.
+  - `livepreview.ts`: Obsidian-style live preview. `table.ts`: the table widget (pure source-model functions at the top, then the widget, then the state field and commands). `slash.ts`: the "/" menu.
+  - `images.ts`: paste, shrink, upload (`upload:` placeholders), drag-and-drop. `sidebar.ts`: the document list (localStorage), title lookup, link discovery, `titleOf`.
+  - `sync.ts`: `DocSync`, one open document in sync (join, flush, remote ops, cursors), and the rebase/merge of unsent edits. `rga.ts`: the CRDT. `text.ts`: diff and three-way merge. `hub.ts`: the typed SignalR client (`hubError()` reads the server's error codes). `ids.ts`: document keys (an edit id, or `r/{readId}`) and random ids.
+- **Offline**: `sw.ts` (service worker, `/sw.js`) serves the last seen page when the network fails (network first, so deploys still arrive at once) and caches the hashed bundle and `/b/` images. `local.ts` keeps each opened document's RGA state, its base text (the text without this device's unsent edits) and unsent ops in IndexedDB (last 50 documents, plus any with unsent edits); without a connection a document opens from that copy, and the ops are merged through the normal rejoin when the hub reconnects. Unsent ops that no longer apply (an insert whose origin the server doesn't have) are merged as text: a three-way merge of base → this device's text into the server's text, so what others wrote meanwhile is kept; overlapping edits keep both. Edits left in documents that aren't open are sent over a second connection after reconnecting (`offline.ts`). Documents deleted by an administrator are dropped from the device and the sidebar, and never resubmitted.
 - **Assets**: the bundle (`wwwroot/assets/app.js`) and service worker are ordinary static assets: `MapStaticAssets` fingerprints the bundle (`Cache-Control: immutable`) and serves it pre-compressed (gzip, plus brotli when published). The page (`app.html`, CSS inlined) is served by `Infrastructure/AppShell.cs` for every document URL with the fingerprinted bundle URL and a strict CSP. After a deploy, open tabs notice the new build on reconnect and reload, keeping unsent edits.
 
 ## Abuse protection
@@ -65,6 +70,8 @@ cd src/client && npx esbuild test/make-rga-fixtures.ts --bundle --platform=node 
 ```
 
 `fixtures/titles.json` holds title cases shared by `MarkdownTitle.cs` and the client's `titleOf`.
+
+Client tests are `src/client/test/*.test.ts` (node:test; `test/run.mjs` bundles them with esbuild): the RGA, the diff and three-way merge, the table source model, `titleOf`, and `DocSync` against a fake hub.
 
 ## Deploy
 

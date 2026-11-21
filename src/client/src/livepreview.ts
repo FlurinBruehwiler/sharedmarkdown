@@ -6,37 +6,10 @@ import { Decoration, ViewPlugin, WidgetType, EditorView, type DecorationSet, typ
 import type { Extension, Range } from '@codemirror/state'
 import { syntaxTree } from '@codemirror/language'
 import type { SyntaxNode } from '@lezer/common'
-import type { DelimiterType, InlineContext, MarkdownConfig } from '@lezer/markdown'
 import { tables } from './table'
+import { localImages, uploadStarted } from './images'
 
-// `==highlight==` (markdownguide.org extended syntax), parsed like GFM strikethrough.
-const HighlightDelim: DelimiterType = { resolve: 'Highlight', mark: 'HighlightMark' }
-const Punctuation = /[\p{S}\p{P}]/u
-export const Highlight: MarkdownConfig = {
-  defineNodes: ['Highlight', 'HighlightMark'],
-  parseInline: [{
-    name: 'Highlight',
-    parse(cx: InlineContext, next: number, pos: number) {
-      if (next !== 61 /* = */ || cx.char(pos + 1) !== 61 || cx.char(pos + 2) === 61 || cx.char(pos - 1) === 61) return -1
-      const before = cx.slice(pos - 1, pos), after = cx.slice(pos + 2, pos + 3)
-      const sBefore = /\s|^$/.test(before), sAfter = /\s|^$/.test(after)
-      const pBefore = Punctuation.test(before), pAfter = Punctuation.test(after)
-      return cx.addDelimiter(HighlightDelim, pos, pos + 2,
-        !sAfter && (!pAfter || sBefore || pBefore),
-        !sBefore && (!pBefore || sAfter || pAfter))
-    },
-    after: 'Emphasis',
-  }],
-}
-
-/**
- * Images pasted in this tab, by markdown src: `upload:<token>` while uploading, then the final
- * `/b/<id>`. They show the local copy at once and keep it after the upload, so the image never
- * flickers or downloads again for the person who pasted it.
- */
-export const localImages = new Map<string, string>()
-
-/** Upload tokens look like `upload:<unix ms>-<random>`; older than this, the upload is presumed dead. */
+/** An `upload:` placeholder older than this (images.ts) is presumed dead. */
 const uploadTimeout = 2 * 60 * 1000
 
 class ImageWidget extends WidgetType {
@@ -48,7 +21,7 @@ class ImageWidget extends WidgetType {
     const local = localImages.get(this.src)
     if (!local && this.src.startsWith('upload:')) {
       // Someone else's image that is still uploading (or whose tab closed mid-upload).
-      const started = Number(this.src.slice(7).split('-')[0])
+      const started = uploadStarted(this.src) ?? Date.now()
       const box = document.createElement('span')
       box.className = 'cm-img-pending'
       box.textContent = Date.now() - started > uploadTimeout ? "Image upload didn't finish" : 'Uploading image…'

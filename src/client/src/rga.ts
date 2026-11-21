@@ -9,16 +9,25 @@ export type DeleteOp = ['d', client: string, clock: number, count: number]
 export type Op = InsertOp | DeleteOp
 /** Document state as runs in document order: [client, clock, text, deleted]. */
 export type StateRun = [client: string, clock: number, text: string, deleted: 0 | 1]
-/** An item id: [client, clock]. */
 export type Id = [client: string, clock: number]
 /** A text change relative to the text after the previous change. */
 export interface TextChange { from: number, to: number, insert: string }
-export interface Splice { p: number, d: number, i: string }
 
 interface Item { c: string, k: number, ch: string, del: boolean }
 
 const gt = (a: Item, c: string, k: number) => a.k !== k ? a.k > k : a.c > c
 const key = (c: string, k: number) => c + ':' + k
+
+class Changes {
+  list: TextChange[] = []
+  last: TextChange | null = null
+  push(from: number, to: number, insert: string) {
+    const last = this.last
+    if (last && !last.insert && to === from + 1 && !insert && last.from === from) last.to++
+    else if (last && last.to === last.from && insert && from === last.from + last.insert.length) last.insert += insert
+    else this.list.push(this.last = { from, to, insert })
+  }
+}
 
 export class Rga {
   readonly client: string
@@ -71,66 +80,114 @@ export class Rga {
     return n
   }
 
-  /** Inserts one item; `hint` is the origin's index if known. Returns the new item's index, or -1 if it already existed. */
-  insertOne(c: string, k: number, origin: string | null, ch: string, hint = -1) {
-    if (this.byId.has(key(c, k))) return -1
-    const items = this.items
-    let idx = 0
-    if (origin) {
-      const o = this.byId.get(origin)
-      if (!o) throw new Error('missing origin ' + origin)
-      idx = (items[hint] === o ? hint : items.indexOf(o)) + 1
-    }
-    while (idx < items.length && gt(items[idx], c, k)) idx++
-    const it = { c, k, ch, del: false }
-    items.splice(idx, 0, it)
-    this.byId.set(key(c, k), it)
-    if (k > this.clock) this.clock = k
-    return idx
-  }
-
   /**
    * Integrates ops from another replica (idempotent).
    * Returns the resulting text changes, each { from, to, insert } relative to the text after the previous one.
+   * Deleting an unknown id is a no-op (the server drops old tombstones); an insert after an unknown origin throws.
    */
   apply(ops: Op[]): TextChange[] {
-    const changes: TextChange[] = []
-    let last: TextChange | null = null
-    const push = (from: number, to: number, insert: string) => {
-      if (last && !last.insert && to === from + 1 && !insert && last.from === from) last.to++
-      else if (last && last.to === last.from && insert && from === last.from + last.insert.length) last.insert += insert
-      else changes.push(last = { from, to, insert })
-    }
-    for (const op of ops) {
-      if (op[0] === 'i') {
-        const [, c, k, oc, ok, text] = op
-        let origin: string | null = oc ? key(oc, ok) : null
-        let prevIdx = -1, prevVis = -1
-        for (let j = 0; j < text.length; j++) {
-          const idx = this.insertOne(c, k + j, origin, text[j], prevIdx)
-          origin = key(c, k + j)
-          if (idx < 0) { prevIdx = -1; continue }
-          const vis = idx === prevIdx + 1 && prevVis >= 0 ? prevVis + 1 : this.visibleBefore(idx)
-          push(vis, vis, text[j])
-          prevIdx = idx
-          prevVis = vis
-        }
-      } else {
-        const [, c, k, n] = op
-        for (let j = 0; j < n; j++) {
-          const it = this.byId.get(key(c, k + j))
-          if (!it || it.del) continue
-          const vis = this.visibleBefore(this.items.indexOf(it))
-          it.del = true
-          push(vis, vis + 1, '')
-        }
+    const out = new Changes()
+    try {
+      for (let i = 0; i < ops.length;) {
+        const op = ops[i]
+        if (op[0] === 'i') { this.insert(op, out); i++; continue }
+        // Consecutive deletes ("select all, delete" sends one per run of ids) take a single walk over the items.
+        const dels: DeleteOp[] = []
+        for (let o: Op | undefined; (o = ops[i]) && o[0] === 'd'; i++) dels.push(o)
+        this.remove(dels, out)
       }
-    }
-    this.cache = null
-    return changes
+    } finally { this.cache = null }
+    return out.list
   }
 
-  /** Whether items (c, k .. k + n - 1) all exist (deleted or not). */
+  insert(op: InsertOp, out: Changes) {
+    const [, c, k, oc, ok, text] = op
+    if (this.has(c, k, text.length)) return // already integrated (sent twice)
+    let items = this.items
+    // pos: index in `items` (not counting new items) before which the next character goes; vis: its text position.
+    let pos = 0, vis = 0
+    if (oc) {
+      const o = this.byId.get(key(oc, ok))
+      if (!o) throw new Error('missing origin ' + key(oc, ok))
+      while (items[pos] !== o) if (!items[pos++].del) vis++
+      if (!o.del) vis++
+      pos++
+    }
+    // New items not spliced in yet, in groups that go before items[at]; almost always a single group.
+    const groups: { at: number, add: Item[] }[] = []
+    const flush = () => {
+      for (let g = groups.length - 1; g >= 0; g--) {
+        const { at, add } = groups[g]
+        if (add.length < 1000) items.splice(at, 0, ...add)
+        else this.items = items = items.slice(0, at).concat(add, items.slice(at))
+      }
+      groups.length = 0
+    }
+    for (let j = 0; j < text.length; j++) {
+      const ck = k + j
+      const existing = this.byId.get(key(c, ck))
+      if (existing) {
+        // Part of the run is already here (merged with ops sent before): carry on after it.
+        flush()
+        pos = items.indexOf(existing) + 1
+        vis = this.visibleBefore(pos)
+        continue
+      }
+      // RGA: skip items after the same origin that have a greater id.
+      const start = pos
+      while (pos < items.length && gt(items[pos], c, ck)) if (!items[pos++].del) vis++
+      const it: Item = { c, k: ck, ch: text[j], del: false }
+      const group = groups[groups.length - 1]
+      if (group && pos === start) group.add.push(it)
+      else groups.push({ at: pos, add: [it] })
+      this.byId.set(key(c, ck), it)
+      if (ck > this.clock) this.clock = ck
+      out.push(vis, vis, text[j])
+      vis++
+    }
+    flush()
+  }
+
+  /** Integrates delete runs with one walk over the items. Changes come out in document order. */
+  remove(ops: DeleteOp[], out: Changes) {
+    const targets = new Set<Item>()
+    for (const [, c, k, n] of ops)
+      for (let j = 0; j < n; j++) {
+        const it = this.byId.get(key(c, k + j))
+        if (it && !it.del) targets.add(it)
+      }
+    let left = targets.size, vis = 0, removed = 0
+    for (const it of this.items) {
+      if (!left) break
+      if (targets.has(it)) {
+        const p = vis - removed // the targets before this one are gone from the text by now
+        out.push(p, p + 1, '')
+        it.del = true
+        removed++
+        vis++
+        left--
+      } else if (!it.del) vis++
+    }
+  }
+
+  /**
+   * The text as it was before `ops` (this replica's own, unconfirmed ops): their inserted characters
+   * left out, the characters they deleted shown. The base of a three-way merge (sync.ts rebase).
+   */
+  textWithout(ops: Op[]) {
+    const inserted = new Set<string>(), deleted = new Set<string>()
+    for (const op of ops) {
+      if (op[0] === 'i') for (let j = 0; j < op[5].length; j++) inserted.add(key(op[1], op[2] + j))
+      else for (let j = 0; j < op[3]; j++) deleted.add(key(op[1], op[2] + j))
+    }
+    let s = ''
+    for (const it of this.items) {
+      const id = key(it.c, it.k)
+      if (!inserted.has(id) && (!it.del || deleted.has(id))) s += it.ch
+    }
+    return s
+  }
+
   has(c: string, k: number, n = 1) {
     for (let j = 0; j < n; j++) if (!this.byId.has(key(c, k + j))) return false
     return true
@@ -182,8 +239,8 @@ export class Rga {
 /**
  * Applies ops that may come out of causal order (unsent ops of several tabs, kept offline): retries the
  * ones whose origin is missing until nothing changes. Returns the ops in an order that applies cleanly,
- * and whether all of them did (false if some reference characters that aren't there, e.g. because the
- * server compacted the document since).
+ * and whether all of them did (false if some inserts go after characters that aren't there, e.g. made
+ * by an op that was lost). Deletes of characters that never show up are no-ops, as on the server.
  */
 export function applyAll(rga: Rga, ops: Op[]): { ok: boolean, applied: Op[] } {
   const applied: Op[] = []
@@ -195,7 +252,11 @@ export function applyAll(rga: Rga, ops: Op[]): { ok: boolean, applied: Op[] } {
       if (op[0] === 'd' && !rga.has(op[1], op[2], op[3])) { failed.push(op); continue }
       try { rga.apply([op]); applied.push(op) } catch { failed.push(op) }
     }
-    if (failed.length === left.length) return { ok: false, applied }
+    if (failed.length === left.length) {
+      // Stuck. The remaining deletes delete whatever of theirs is there (the rest is gone or never comes).
+      for (const op of failed) if (op[0] === 'd') { rga.apply([op]); applied.push(op) }
+      return { ok: failed.every(op => op[0] === 'd'), applied }
+    }
     left = failed
   }
   return { ok: true, applied }
@@ -224,14 +285,4 @@ export function firstBatch(ops: Op[], max = 128 * 1024): [batch: Op[], rest: Op[
   let size = 0, n = 0
   while (n < ops.length && (n === 0 || size + JSON.stringify(ops[n]).length <= max)) size += JSON.stringify(ops[n++]).length
   return [ops.slice(0, n), ops.slice(n)]
-}
-
-/** Single-splice diff: common prefix and suffix. */
-export function diff(a: string, b: string): Splice {
-  const n = Math.min(a.length, b.length)
-  let s = 0
-  while (s < n && a.charCodeAt(s) === b.charCodeAt(s)) s++
-  let e = 0
-  while (e < n - s && a.charCodeAt(a.length - 1 - e) === b.charCodeAt(b.length - 1 - e)) e++
-  return { p: s, d: a.length - s - e, i: b.slice(s, b.length - e) }
 }
