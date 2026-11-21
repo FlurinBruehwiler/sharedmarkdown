@@ -82,7 +82,7 @@ One-time server setup:
 1. User `sharedmarkdown`, folders `/opt/sharedmarkdown/{releases,data}` owned by it.
 2. `deploy/sharedmarkdown.service` → `/etc/systemd/system/`, then `systemctl enable sharedmarkdown`.
 3. `/opt/sharedmarkdown/sharedmarkdown.env` (mode 600) with `Admin__Password=<long random password>`.
-4. Caddy as the reverse proxy: add the site block from `deploy/Caddyfile` and `systemctl reload caddy` (`deploy/setup-server.sh` does steps 1–4). It handles TLS, WebSockets and `X-Forwarded-For`. If the proxy isn't on the same machine, add its IP to `KnownProxies`.
+4. Caddy as the reverse proxy: add the site block from `deploy/Caddyfile` and `systemctl reload caddy`. It handles TLS, WebSockets and `X-Forwarded-For`. If the proxy isn't on the same machine, add its IP to `KnownProxies`.
 5. GitHub secret `DEPLOY_SSH_PRIVATE_KEY`, and passwordless sudo for `systemctl restart sharedmarkdown`.
 6. Copy `/opt/sharedmarkdown/data/backups` off the server regularly (daily backups are kept 14 days on the same disk).
 
