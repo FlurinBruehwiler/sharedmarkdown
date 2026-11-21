@@ -29,6 +29,9 @@ jobs:
       - name: Test
         run: cd src/client && npm ci && npm run check && npm test
 
+      - name: Test server
+        run: dotnet test tests/SharedMarkdown.Tests
+
       - name: Restore
         run: dotnet restore ./src/SharedMarkdown/SharedMarkdown.csproj -r linux-x64 -p:SelfContained=true
 

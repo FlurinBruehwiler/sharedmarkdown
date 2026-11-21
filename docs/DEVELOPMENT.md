@@ -19,7 +19,7 @@ Admin__Password=something dotnet run
 ## How it works
 
 - **Backend** (ASP.NET Core, one process): SignalR hub `Documents/DocHub.cs`, SQLite via EF Core with migrations (`Data/`), images stored in SQLite (`/api/blobs`, served from `/b/{sha}`, processed in `Images/`), abuse limits in `Protection/`, admin dashboard in Blazor Server (`Admin/`), asset serving and backups in `Infrastructure/`. All under `src/SharedMarkdown/`.
-- **Real-time sync**: a hand-written RGA sequence CRDT over the markdown text, identical in `Documents/Rga.cs` and `src/client/src/rga.ts`. The server keeps a replica, writes it to SQLite every 2 s (`Documents/DocStore.cs`) and relays ops. Deleted characters are compacted away when a document is loaded. Other people's cursors are sent as CRDT anchors and drawn as unlabeled carets.
+- **Real-time sync**: a hand-written RGA sequence CRDT over the markdown text, identical in `Documents/Rga.cs` and `src/client/src/rga.ts`. The server keeps a replica, writes it to SQLite every 2 s (`Documents/DocStore.cs`, `DocFlusher.cs`) and relays ops. Deleted characters are compacted away when a document that hasn't been edited for 7 days is loaded (visible characters keep their ids, so offline edits still apply). The hub's error strings and `Submit` results are the wire contract in `Documents/HubContract.cs`. Other people's cursors are sent as CRDT anchors and drawn as unlabeled carets.
 - **Frontend** (`src/client`): TypeScript (strict) + [CodeMirror 6](https://codemirror.net), no framework, bundled by esbuild. `livepreview.ts` does Obsidian-style live preview, `table.ts` the table widget and toolbar, `hub.ts` is a ~60-line typed SignalR client, `sync.ts` the sync glue.
 - **Offline**: `sw.ts` (service worker, `/sw.js`) serves the last seen page when the network fails (network first, so deploys still arrive at once) and caches the hashed bundle and `/b/` images. `local.ts` keeps each opened document's RGA state and unsent ops in IndexedDB (last 50 documents, plus any with unsent edits); without a connection a document opens from that copy, and the ops are merged through the normal rejoin when the hub reconnects. Edits left in documents that aren't open are sent over a second connection after reconnecting (`offline.ts`).
 - **Assets**: the bundle (`wwwroot/assets/app.js`) and service worker are ordinary static assets: `MapStaticAssets` fingerprints the bundle (`Cache-Control: immutable`) and serves it pre-compressed (gzip, plus brotli when published). The page (`app.html`, CSS inlined) is served by `Infrastructure/AppShell.cs` for every document URL with the fingerprinted bundle URL and a strict CSP. After a deploy, open tabs notice the new build on reconnect and reload, keeping unsent edits.
@@ -42,11 +42,11 @@ All limits are per client IP (IPv6 grouped by /64), have defaults in `src/Shared
 
 Uploaded images are decoded and re-encoded with SkiaSharp: this validates them, applies the EXIF rotation and drops all metadata (GPS position etc.). GIFs are kept as uploaded (Skia can't encode GIF; they carry no EXIF).
 
-The admin dashboard shows usage, lists documents and images (searchable, filterable by IP, deletable one by one or per IP), blocks IPs, edits limits and makes/downloads backups.
+The admin dashboard shows usage, lists documents and images (searchable, filterable by IP, deletable one by one or per IP), blocks IPs, edits limits and makes/downloads backups. Deleted documents stay deleted: their ids are remembered (`DeletedDocuments`), so an offline copy reconnecting later can't bring them back.
 
 ## Security notes
 
-- The document URL is the only access control (12 random base62 characters, ~71 bits).
+- The document URL is the only access control (12 random base62 characters, ~71 bits; `Documents/DocIds.cs`).
 - Read-only links (`/r/{readId}`, from the arrow next to "Copy link") use a separate random id (16 base62 characters, made on first request, column `Documents.ReadId`). Connections that join with it (`DocHub.JoinRead`) get live ops, presence and others' cursors, but `Submit` refuses them server-side, their cursors aren't relayed, and nothing sent to them contains the edit id. Links inside a document are still whatever the text says (usually edit links). Pages send `Referrer-Policy: no-referrer` so the URL never leaks to linked sites, and `X-Robots-Tag: noindex`.
 - The editor page has a strict Content-Security-Policy (only the bundled script and the hashed inline theme script run).
 - Admin login is a single password (`Admin:Password`), compared in constant time, rate limited, with an HttpOnly SameSite=Strict cookie. Use a long random password.
@@ -55,7 +55,16 @@ The admin dashboard shows usage, lists documents and images (searchable, filtera
 
 ```bash
 cd src/client && npm run check && npm test
+dotnet test tests/SharedMarkdown.Tests
 ```
+
+The .NET tests (`tests/SharedMarkdown.Tests`) replay `fixtures/rga.json`, random editing sessions recorded with the client's `rga.ts`, to check that `Rga.cs` integrates identically. Regenerate it after changing `rga.ts`:
+
+```bash
+cd src/client && npx esbuild test/make-rga-fixtures.ts --bundle --platform=node --format=esm --outfile=test/.out/make-rga-fixtures.mjs && node test/.out/make-rga-fixtures.mjs
+```
+
+`fixtures/titles.json` holds title cases shared by `MarkdownTitle.cs` and the client's `titleOf`.
 
 ## Deploy
 
