@@ -14,4 +14,6 @@ public static partial class DocIds
     public static partial Regex ReadId();
 
     public static string NewReadId() => RandomNumberGenerator.GetString(Base62, 16);
+
+    public static string NewEditId() => RandomNumberGenerator.GetString(Base62, 12);
 }

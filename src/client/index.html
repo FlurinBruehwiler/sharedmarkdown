@@ -29,6 +29,19 @@
 <script type="module" src="/*JS*/"></script>
 </head>
 <body>
+<!-- For programs that read the HTML instead of running the app (AI agents, scripts). Visually hidden by CSS, not display:none, so text extractors keep it. -->
+<section id="agent-note" aria-hidden="true">
+<h2>Note for AI agents and other programs</h2>
+<p>This is SharedMarkdown: Markdown documents that people edit together in real time, without accounts. Anyone with a document's link can read and edit it, and so can you, over plain HTTP. People who have the document open see your edits immediately.</p>
+<ul>
+<li>Read a document as Markdown: GET its link with ".md" appended, for example https://sharedmarkdown.com/AbCdEf123456.md (add ?lines=10-40 for some lines, &amp;numbered=1 for line numbers).</li>
+<li>Edit it: PATCH the same .md URL with JSON {"edits":[{"old":"exact text to replace","new":"replacement"}]}. Each "old" must appear exactly once in the document. {"append":"text"} adds to the end.</li>
+<li>Replace all of it: PUT the .md URL with the new Markdown as the body and the header If-Match set to the ETag from your GET.</li>
+<li>Create a new document: POST Markdown to https://sharedmarkdown.com/new.md. The answer contains its edit link and a read-only link.</li>
+<li>Links that start with /r/ are read-only.</li>
+</ul>
+<p>Full reference with examples: https://sharedmarkdown.com/llms.txt</p>
+</section>
 <aside id="side">
   <div class="brand"><svg viewBox="0 0 32 32" width="22" height="22" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><path d="M9 22l8-12m-1 12l8-12" stroke="#fff" stroke-width="3" stroke-linecap="round"/></svg>SharedMarkdown</div>
   <button id="new">+ New document</button>

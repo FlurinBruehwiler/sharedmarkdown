@@ -16,7 +16,7 @@ public static class SecurityHeaders
 
     // Only the home page (and the files search engines and link previews fetch for it) may be indexed:
     // documents are private links.
-    static readonly HashSet<string> Public = ["/", "/robots.txt", "/sitemap.xml", "/favicon.svg", "/favicon.ico", "/apple-touch-icon.png", "/og.png"];
+    static readonly HashSet<string> Public = ["/", "/robots.txt", "/sitemap.xml", "/favicon.svg", "/favicon.ico", "/apple-touch-icon.png", "/og.png", "/llms.txt"];
 
     static bool Indexable(PathString path) => Public.Contains(path.Value ?? "");
 }

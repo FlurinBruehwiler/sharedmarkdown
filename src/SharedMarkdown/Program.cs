@@ -35,6 +35,7 @@ builder.Services.AddDbContextFactory<AppDb>(o => o.UseSqlite(paths.ConnectionStr
 builder.Services.AddSingleton<DocStore>();
 builder.Services.AddHostedService<DocFlusher>();
 builder.Services.AddSingleton<AppShell>();
+builder.Services.AddSingleton<AgentApi>();
 builder.Services.AddSingleton<ImageService>();
 builder.Services.AddSingleton<LimitsService>();
 builder.Services.AddSingleton<IpGuard>();
@@ -101,6 +102,7 @@ app.Use((ctx, next) =>
 app.MapStaticAssets();
 app.Services.GetRequiredService<AppShell>().Load(app);
 app.MapDocuments();
+app.MapAgentApi();
 app.MapBlobs();
 app.MapAdmin();
 app.MapRazorComponents<App>().AddInteractiveServerRenderMode();

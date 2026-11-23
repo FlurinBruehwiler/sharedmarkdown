@@ -35,6 +35,7 @@ public class Rga
 
     readonly List<Item> _items = [];
     readonly Dictionary<Id, Item> _byId = [];
+    long _clock;
 
     public int Length { get; private set; }
 
@@ -84,10 +85,39 @@ public class Rga
             }
             _items.InsertRange(idx, run);
             Length += run.Length;
+            _clock = Math.Max(_clock, run[^1].Id.Clock);
             origin = run[^1].Id;
             hint = idx + run.Length - 1;
             j = end;
         }
+    }
+
+    // The server's own edit (the agent API), like rga.ts splice: replaces visible [pos, pos + count) with text,
+    // applies it and returns the ops in wire format, to send to the clients.
+    public List<object[]> Splice(int pos, int count, string text, string client)
+    {
+        var ops = new List<object[]>();
+        int i = 0, visible = 0;
+        Item? origin = null;
+        for (; i < _items.Count && visible < pos; i++) if (!_items[i].Deleted) { visible++; origin = _items[i]; }
+        object[]? run = null;
+        for (int n = 0; n < count && i < _items.Count; i++)
+        {
+            var it = _items[i];
+            if (it.Deleted) continue;
+            it.Deleted = true;
+            Length--;
+            n++;
+            if (run != null && (string)run[1] == it.Id.Client && (long)run[2] + (int)run[3] == it.Id.Clock) run[3] = (int)run[3] + 1;
+            else ops.Add(run = ["d", it.Id.Client, it.Id.Clock, 1]);
+        }
+        if (text.Length > 0)
+        {
+            var first = new Id(client, _clock + 1);
+            InsertRun(first, origin?.Id, text);
+            ops.Add(["i", client, first.Clock, origin?.Id.Client ?? "", origin?.Id.Clock ?? 0L, text]);
+        }
+        return ops;
     }
 
     public enum ApplyResult { Ok, Invalid, TooLarge }
@@ -242,6 +272,7 @@ public class Rga
                 rga._byId[item.Id] = item;
                 if (!deleted) rga.Length++;
             }
+            rga._clock = Math.Max(rga._clock, clock + text.Length - 1);
         }
         return rga;
     }

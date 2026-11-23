@@ -4,6 +4,8 @@ namespace SharedMarkdown;
 
 public static class DocumentEndpoints
 {
+    static bool WantsMarkdown(HttpContext ctx) => ctx.Request.Headers.Accept.ToString().Contains("text/markdown", StringComparison.OrdinalIgnoreCase);
+
     public static void MapDocuments(this IEndpointRouteBuilder app)
     {
         app.MapHub<DocHub>("/hub", o => o.Transports = HttpTransportType.WebSockets);
@@ -19,9 +21,18 @@ public static class DocumentEndpoints
         });
 
         app.MapGet("/", (HttpContext ctx, AppShell shell) => shell.Serve(ctx));
-        app.MapGet("/{id}", (string id, HttpContext ctx, AppShell shell) =>
-            DocIds.EditId().IsMatch(id) ? shell.ServeDocument(ctx, id, null) : Results.NotFound().ExecuteAsync(ctx));
-        app.MapGet("/r/{readId}", (string readId, HttpContext ctx, AppShell shell) =>
-            DocIds.ReadId().IsMatch(readId) ? shell.ServeDocument(ctx, null, readId) : Results.NotFound().ExecuteAsync(ctx));
+        // A client that asks for Markdown (agents, scripts) gets the document's text instead of the editor.
+        app.MapGet("/{id}", async (string id, HttpContext ctx, AppShell shell, AgentApi api) =>
+        {
+            if (!DocIds.EditId().IsMatch(id)) await Results.NotFound().ExecuteAsync(ctx);
+            else if (WantsMarkdown(ctx)) await (await api.Read(ctx, id, null)).ExecuteAsync(ctx);
+            else await shell.ServeDocument(ctx, id, null);
+        });
+        app.MapGet("/r/{readId}", async (string readId, HttpContext ctx, AppShell shell, AgentApi api) =>
+        {
+            if (!DocIds.ReadId().IsMatch(readId)) await Results.NotFound().ExecuteAsync(ctx);
+            else if (WantsMarkdown(ctx)) await (await api.Read(ctx, null, readId)).ExecuteAsync(ctx);
+            else await shell.ServeDocument(ctx, null, readId);
+        });
     }
 }

@@ -171,4 +171,34 @@ public class RgaTests
         Assert.Equal(Ok, Apply(rga, """[["i","b",5,"a",1,"1"],["i","B",5,"a",1,"2"],["i","c",6,"a",1,"3"]]"""));
         Assert.Equal("a312b", rga.Text());
     }
+
+    [Fact]
+    public void SplicesMatchAStringAndReplayOnOtherReplicas()
+    {
+        var random = new Random(7);
+        var server = new Rga();
+        var other = new Rga();
+        var model = "";
+        for (var n = 0; n < 400; n++)
+        {
+            var pos = random.Next(model.Length + 1);
+            var count = random.Next(Math.Min(6, model.Length - pos) + 1);
+            var text = random.Next(3) == 0 ? "" : new string((char)('a' + random.Next(26)), random.Next(1, 5));
+            var ops = server.Splice(pos, count, text, n % 2 == 0 ? "agentA" : "agentB");
+            model = string.Concat(model.AsSpan(0, pos), text, model.AsSpan(pos + count));
+            Assert.Equal(model, server.Text());
+            Assert.Equal(Ok, other.Apply(JsonSerializer.SerializeToElement(ops), 50_000, 500_000));
+            Assert.Equal(server.Encode(), other.Encode());
+        }
+    }
+
+    [Fact]
+    public void SpliceClocksFollowTheDocument()
+    {
+        var rga = With("hello");
+        var ops = rga.Splice(5, 0, "!", "agent");
+        Assert.Equal("hello!", rga.Text());
+        Assert.True((long)ops.Single()[2] > 5);
+        Assert.Equal("[]", JsonSerializer.Serialize(rga.Splice(3, 0, "", "agent")));
+    }
 }
