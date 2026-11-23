@@ -9,7 +9,7 @@ import { undo, redo, isolateHistory } from '@codemirror/commands'
 import type { SyntaxNode } from '@lezer/common'
 import { diff } from './text'
 
-type LinkHandler = (href: string) => void
+type LinkHandler = (href: string, newTab: boolean) => void
 const linkHandler = Facet.define<LinkHandler, LinkHandler>({ combine: handlers => handlers[0] ?? (() => {}) })
 
 // ---------- source model ----------
@@ -836,13 +836,15 @@ function attach(wrap: TableDOM, addCol: HTMLButtonElement, addRow: HTMLButtonEle
     openMenu({ x: e.clientX, y: e.clientY }, [{ section: 'Row' }, ...rowItems(wrap, r), { sep: true }, { section: 'Column' }, ...colItems(wrap, c)])
   })
 
+  wrap.addEventListener('auxclick', e => { if (e.button === 1 && e.target instanceof Element && e.target.closest('.cm-tbl-link')) e.preventDefault() })
   wrap.addEventListener('mousedown', e => {
-    if (e.button !== 0) return
+    if (e.button > 1) return
     const td = cellOf(e.target)
     if (!td || !wrap.contains(td)) return
     const p = posOf(td)
     const link = e.target instanceof Element ? e.target.closest<HTMLElement>('.cm-tbl-link') : null
-    if (link && !td.classList.contains('cm-tbl-raw')) { e.preventDefault(); view.state.facet(linkHandler)(link.dataset.href!); return }
+    if (link && !td.classList.contains('cm-tbl-raw')) { e.preventDefault(); view.state.facet(linkHandler)(link.dataset.href!, e.button === 1 || e.ctrlKey || e.metaKey); return }
+    if (e.button !== 0) return
     if (e.shiftKey && wrap.editing) { e.preventDefault(); setRect(wrap, norm(wrap.editing, p)); wrap.focus(); return }
     dragFrom = p
   })

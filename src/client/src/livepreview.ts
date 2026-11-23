@@ -298,7 +298,7 @@ export function deleteSelectedImage(view: EditorView) {
   return true
 }
 
-export function livePreview(openLink: (href: string) => void): Extension {
+export function livePreview(openLink: (href: string, newTab: boolean) => void): Extension {
   return [
     tables(openLink),
     ViewPlugin.fromClass(class {
@@ -322,10 +322,15 @@ export function livePreview(openLink: (href: string) => void): Extension {
           }
         }
         const a = e.target instanceof Element ? e.target.closest<HTMLElement>('.cm-live[data-href]') : null
-        if (!a || e.button !== 0) return false
+        if (!a || e.button > 1) return false
         e.preventDefault()
-        openLink(a.dataset.href!) // the selector requires data-href
+        // Links are spans (browsers don't follow links in editable text), so Ctrl/Cmd and middle click are ours to handle.
+        openLink(a.dataset.href!, e.button === 1 || e.ctrlKey || e.metaKey)
         return true
+      },
+      // Middle click would otherwise paste the selection on Linux.
+      auxclick(e) {
+        return e.button === 1 && e.target instanceof Element && !!e.target.closest('.cm-live[data-href]') && (e.preventDefault(), true)
       },
     }),
   ]

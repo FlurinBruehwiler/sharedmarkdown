@@ -60,11 +60,12 @@ function textChanged() {
   sidebar.textChanged(sync.key, md)
 }
 
-function openLink(href: string) {
+function openLink(href: string, newTab: boolean) {
   let u: URL
   try { u = new URL(href, location.href) } catch { return }
   const key = u.origin === location.origin && docKey(u.pathname)
-  if (key) go(key)
+  if (key && !newTab) go(key)
+  else if (key) window.open(u.href, '_blank', 'noopener')
   else if (/^(https?|mailto):$/.test(u.protocol)) window.open(u.href, '_blank', 'noopener')
 }
 

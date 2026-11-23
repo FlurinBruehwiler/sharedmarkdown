@@ -18,7 +18,7 @@ export interface EditorOptions {
   area: HTMLElement
   sync: DocSync
   images: ImageContext
-  openLink: (href: string) => void
+  openLink: (href: string, newTab: boolean) => void
   linkTitle: (key: string) => Promise<string | null>
   onDocChanged: () => void
 }
