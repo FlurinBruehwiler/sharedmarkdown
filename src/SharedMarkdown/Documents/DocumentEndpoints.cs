@@ -25,13 +25,13 @@ public static class DocumentEndpoints
         app.MapGet("/{id}", async (string id, HttpContext ctx, AppShell shell, AgentApi api) =>
         {
             if (!DocIds.EditId().IsMatch(id)) await Results.NotFound().ExecuteAsync(ctx);
-            else if (WantsMarkdown(ctx)) await (await api.Read(ctx, id, null)).ExecuteAsync(ctx);
+            else if (WantsMarkdown(ctx)) await (await api.Read(ctx, id, null, withNote: true)).ExecuteAsync(ctx);
             else await shell.ServeDocument(ctx, id, null);
         });
         app.MapGet("/r/{readId}", async (string readId, HttpContext ctx, AppShell shell, AgentApi api) =>
         {
             if (!DocIds.ReadId().IsMatch(readId)) await Results.NotFound().ExecuteAsync(ctx);
-            else if (WantsMarkdown(ctx)) await (await api.Read(ctx, null, readId)).ExecuteAsync(ctx);
+            else if (WantsMarkdown(ctx)) await (await api.Read(ctx, null, readId, withNote: true)).ExecuteAsync(ctx);
             else await shell.ServeDocument(ctx, null, readId);
         });
     }

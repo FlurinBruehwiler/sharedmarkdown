@@ -16,7 +16,7 @@ public class AgentApi(DocStore store, IpGuard guard, LimitsService limits, IHubC
 
     sealed class Refused(IResult result) : Exception { public IResult Result { get; } = result; }
 
-    public async Task<IResult> Read(HttpContext ctx, string? id, string? readId)
+    public async Task<IResult> Read(HttpContext ctx, string? id, string? readId, bool withNote = false)
     {
         var ip = IpGuard.IpOf(ctx);
         if (guard.IsBlocked(ip)) return Message(403, "Access from your network is blocked.");
@@ -39,6 +39,14 @@ public class AgentApi(DocStore store, IpGuard guard, LimitsService limits, IHubC
         ctx.Response.Headers.ETag = Version(text);
         ctx.Response.Headers["X-Total-Lines"] = lines.Length.ToString();
         ctx.Response.Headers.CacheControl = "no-store";
+        // Fetch tools that ask the plain link for Markdown never see the page's note for agents. Hidden when rendered.
+        if (withNote)
+        {
+            var md = $"{Origin(ctx)}{ctx.Request.Path}.md";
+            body = (id != null
+                ? $"<!-- SharedMarkdown (this note isn't part of the document): anyone with this link, AI agents included, can edit the document over plain HTTP; people who have it open see the changes live. Read the exact text at {md}, change it with PATCH {md}. How: {Origin(ctx)}/llms.txt -->"
+                : $"<!-- SharedMarkdown (this note isn't part of the document): this is a read-only link. The exact text: {md}. More: {Origin(ctx)}/llms.txt -->") + "\n\n" + body;
+        }
         return Results.Text(body, "text/markdown; charset=utf-8");
     }
 

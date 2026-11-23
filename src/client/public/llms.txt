@@ -17,7 +17,7 @@ Returns the Markdown (text/markdown). Headers: `ETag` (the document's current ve
 - `?lines=10-40`: only those lines (also `10-` to the end, or `10` for one line).
 - `?numbered=1`: each line prefixed with its line number and a tab, like `cat -n`. The numbers are not part of the document.
 
-A request to the plain link with `Accept: text/markdown` also returns the Markdown.
+A request to the plain link with `Accept: text/markdown` also returns the Markdown, after an HTML comment pointing here (not part of the document). Use the `.md` URL for the exact text, e.g. before editing.
 
 ## Edit parts of it (PATCH)
 

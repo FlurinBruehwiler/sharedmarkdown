@@ -42,7 +42,10 @@ public class AgentApiTests(AppFactory app) : IClassFixture<AppFactory>
 
         var md = new HttpRequestMessage(HttpMethod.Get, $"/{id}");
         md.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/markdown"));
-        Assert.Equal("# Notes\n\none\ntwo\n", await (await http.SendAsync(md)).Content.ReadAsStringAsync());
+        var negotiated = await (await http.SendAsync(md)).Content.ReadAsStringAsync();
+        Assert.StartsWith("<!-- SharedMarkdown", negotiated);
+        Assert.Contains($"PATCH http://localhost/{id}.md", negotiated);
+        Assert.EndsWith("-->\n\n# Notes\n\none\ntwo\n", negotiated);
         Assert.Contains("<html", await http.GetStringAsync($"/{id}"));
     }
 
